@@ -1,0 +1,4 @@
+[alias]
+coverage = "llvm-cov nextest --workspace --all-features --locked --profile ci --ignore-filename-regex (crates/pbdems2-bench|src/test_utils.rs|src/entity/field_path/test_support.rs)"
+coverage-report = "llvm-cov report --summary-only --ignore-filename-regex (crates/pbdems2-bench|src/test_utils.rs|src/entity/field_path/test_support.rs) --fail-under-lines 75"
+coverage-lcov = "llvm-cov report --lcov --ignore-filename-regex (crates/pbdems2-bench|src/test_utils.rs|src/entity/field_path/test_support.rs) --output-path lcov.info"

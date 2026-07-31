@@ -1,0 +1,40 @@
+[package]
+name = "pbdems2-bench"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88.0"
+publish = false
+
+[dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support", "html_reports"] }
+pbdems2 = { path = "../.." }
+rustc-hash = "2.1.1"
+snap = "1.1.1"
+
+[[bench]]
+name = "io"
+harness = false
+
+[[bench]]
+name = "demo"
+harness = false
+
+[[bench]]
+name = "decoders"
+harness = false
+
+[[bench]]
+name = "serializers"
+harness = false
+
+[[bench]]
+name = "entities"
+harness = false
+
+[[bench]]
+name = "string_tables"
+harness = false
+
+
+[lints]
+workspace = true
