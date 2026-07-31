@@ -1,4 +1,8 @@
+# The development toolchain, deliberately not the MSRV: `rust-version` in
+# Cargo.toml is the compatibility promise, and CI proves it with a dedicated
+# 1.88.0 matrix entry. Pinning this file to the MSRV instead would silently
+# downgrade every other job, because a toolchain file outranks `rustup default`.
 [toolchain]
-channel = "1.88.0"
+channel = "stable"
 components = ["clippy", "rustfmt"]
 profile = "minimal"

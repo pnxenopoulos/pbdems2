@@ -94,6 +94,11 @@ jobs:
   test:
     name: Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    env:
+      # rust-toolchain.toml outranks the `rustup default` that the toolchain
+      # action sets, so the matrix entry has to be forced through the
+      # environment or every row would silently run the same toolchain.
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
     strategy:
       fail-fast: false
       matrix:

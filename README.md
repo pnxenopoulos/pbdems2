@@ -1,12 +1,20 @@
+<div align="center">
+
 # pbdems2
+
+[![crates.io](https://img.shields.io/crates/v/pbdems2.svg)](https://crates.io/crates/pbdems2)
+[![crates.io Downloads](https://img.shields.io/crates/d/pbdems2.svg)](https://crates.io/crates/pbdems2)
+[![docs.rs](https://docs.rs/pbdems2/badge.svg)](https://docs.rs/pbdems2)
+[![CI](https://img.shields.io/github/actions/workflow/status/pnxenopoulos/pbdems2/ci.yml?branch=main)](https://github.com/pnxenopoulos/pbdems2/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/pnxenopoulos/pbdems2/blob/main/LICENSE)
+
+</div>
 
 pbdems2 is a game-neutral Rust library for Valve Source 2 demo and replay
 files. It implements the shared PBDEMS2 container and entity wire format while
 leaving generated protobuf messages and game semantics to consumer crates.
 
-Awpy should own its CS2 protobuf schema and conversion layer. Boon should own
-its Deadlock protobuf schema and conversion layer. Neither generated schema is
-part of this repository.
+Some projects that use pbdems2 are [Boon (Deadlock)](https://github.com/pnxenopoulos/boon) and [Awpy (CS2)](https://github.com/pnxenopoulos/awpy).
 
 ## Responsibilities
 
@@ -27,11 +35,6 @@ Game crates own:
 - conversion from protobuf messages into pbdems2 input structures
 - game events and domain models
 - title-specific constants, datasets, and language bindings
-
-The dependency direction is one-way:
-
-    awpy-proto -> awpy -> pbdems2
-    boon-proto -> boon -> pbdems2
 
 ## Game adapters
 
@@ -197,7 +200,3 @@ public API against the latest crates.io release with cargo-semver-checks once a
 published baseline exists.
 
 Release builds use thin LTO and one codegen unit.
-
-## License
-
-MIT. See LICENSE.

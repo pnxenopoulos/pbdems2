@@ -25,6 +25,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # A toolchain file outranks the `rustup default` that the toolchain action
+  # sets, so rust-toolchain.toml would win and `-Zsanitizer` would be rejected.
+  RUSTUP_TOOLCHAIN: nightly
+  # Prebuilt cargo-fuzz binaries are musl-linked, which makes their built-in
+  # default target musl; instrumented builds have to target the glibc host.
+  FUZZ_TARGET_TRIPLE: x86_64-unknown-linux-gnu
 
 jobs:
   build:
@@ -47,7 +53,7 @@ jobs:
           tool: cargo-fuzz
 
       - name: Compile every fuzz target
-        run: cargo fuzz build
+        run: cargo fuzz build --target "$FUZZ_TARGET_TRIPLE"
 
   campaign:
     name: Fuzz ${{ matrix.target }}
@@ -82,4 +88,6 @@ jobs:
           tool: cargo-fuzz
 
       - name: Run bounded campaign
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300 -rss_limit_mb=4096
+        env:
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: cargo fuzz run "$FUZZ_TARGET" --target "$FUZZ_TARGET_TRIPLE" -- -max_total_time=300 -rss_limit_mb=4096
