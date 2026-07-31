@@ -8,6 +8,15 @@ use crate::error::{Error, Result};
 /// while still preventing a corrupt length field from requesting effectively
 /// unbounded memory. Callers parsing known-large captures can raise individual
 /// limits with the builder methods.
+///
+/// # Example
+///
+/// ```
+/// use pbdems2::DecodeLimits;
+///
+/// let limits = DecodeLimits::default().with_max_command_body_bytes(4 * 1024 * 1024);
+/// assert_eq!(limits.max_command_body_bytes(), 4 * 1024 * 1024);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DecodeLimits {

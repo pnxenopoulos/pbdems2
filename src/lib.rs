@@ -4,6 +4,31 @@
 //! flattened serializers, entity state, string tables, and coordinate helpers.
 //! Game crates provide their generated protobuf types and select an entity
 //! decoding dialect.
+//!
+//! # Example
+//!
+//! Walk the outer command stream, decompressing each body in turn:
+//!
+//! ```no_run
+//! use pbdems2::demo::Demo;
+//!
+//! let bytes = std::fs::read("match.dem")?;
+//! let demo = Demo::new(&bytes)?;
+//!
+//! let mut body = Vec::new();
+//! for frame in demo.commands() {
+//!     let frame = frame?;
+//!     frame.decode_body(&mut body)?;
+//!     println!("tick {}, command {}", frame.header().tick, frame.header().cmd);
+//! }
+//! # Ok::<(), pbdems2::Error>(())
+//! ```
+//!
+//! Reading entity state needs a game crate's generated protobuf types:
+//! implement [`DemoAdapter`] to convert them into the neutral types in
+//! [`entity`], then drive it with [`DemoParser`].
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(missing_docs)]
 
 pub mod demo;
 pub mod entity;
@@ -11,6 +36,7 @@ pub mod error;
 pub mod io;
 pub mod limits;
 #[cfg(feature = "mmap")]
+#[cfg_attr(docsrs, doc(cfg(feature = "mmap")))]
 pub mod mmap;
 pub mod playback;
 pub mod position;
@@ -22,5 +48,6 @@ pub use entity::Entity;
 pub use error::{Error, Result};
 pub use limits::DecodeLimits;
 #[cfg(feature = "mmap")]
+#[cfg_attr(docsrs, doc(cfg(feature = "mmap")))]
 pub use mmap::MappedDemo;
 pub use playback::{CommandContext, DemoAdapter, DemoParser, ParserState};

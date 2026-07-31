@@ -9,17 +9,26 @@ use crate::error::FieldValueConversionError;
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum FieldValue {
+    /// Single-bit boolean.
     Bool(bool),
+    /// Signed 32-bit integer, including entity handles and class IDs.
     I32(i32),
+    /// Signed 64-bit integer.
     I64(i64),
+    /// Unsigned 32-bit integer.
     U32(u32),
+    /// Unsigned 64-bit integer, typically a Steam ID or bit mask.
     U64(u64),
+    /// Single-precision float, already dequantized where applicable.
     F32(f32),
     /// Raw byte string. Stored as `Vec<u8>` rather than `std::string::String`
     /// because some Source 2 strings are not guaranteed to be valid UTF-8.
     String(Vec<u8>),
+    /// Two-component float vector.
     Vector2([f32; 2]),
+    /// Three-component float vector, usually a world position or velocity.
     Vector3([f32; 3]),
+    /// Four-component float vector.
     Vector4([f32; 4]),
     /// Arbitrary-length float vector, for multi-component types that don't fit
     /// the fixed vectors above (e.g. `Quaternion` = 4, `CTransform` = 6).

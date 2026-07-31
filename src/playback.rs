@@ -238,8 +238,13 @@ impl<'state, 'filter> CommandContext<'state, 'filter> {
 /// [`crate::Error`]; the `From<Error>` bound lets the driver propagate framing
 /// and limit failures without stringifying them.
 pub trait DemoAdapter {
+    /// Failure type produced by the adapter, able to carry a [`crate::Error`].
     type Error: From<Error>;
 
+    /// Handle one decompressed command from the demo stream.
+    ///
+    /// `body` is the decoded payload for `frame`; commands the adapter does
+    /// not care about should return `Ok(())` without touching `context`.
     fn handle_command(
         &mut self,
         frame: &CommandFrame<'_>,

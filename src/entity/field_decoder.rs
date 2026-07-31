@@ -471,7 +471,9 @@ pub enum FieldSpecialDescriptor {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct FieldMetadata {
+    /// Decoder selected for the field's wire encoding.
     pub decoder: Decoder,
+    /// Array or pointer shape layered on top of `decoder`, if any.
     pub special: Option<FieldSpecialDescriptor>,
 }
 
@@ -485,6 +487,7 @@ impl Default for FieldMetadata {
 }
 
 impl FieldMetadata {
+    /// Returns `true` for variable-length arrays of either element kind.
     pub fn is_dynamic_array(&self) -> bool {
         matches!(
             self.special,
@@ -493,6 +496,7 @@ impl FieldMetadata {
         )
     }
 
+    /// Returns `true` for arrays with a length fixed by the schema.
     pub fn is_fixed_array(&self) -> bool {
         matches!(
             self.special,
@@ -500,6 +504,7 @@ impl FieldMetadata {
         )
     }
 
+    /// Element count for a fixed-length array, or `None` for other shapes.
     pub fn fixed_array_length(&self) -> Option<usize> {
         match &self.special {
             Some(FieldSpecialDescriptor::FixedArray { length }) => Some(*length),
@@ -507,6 +512,8 @@ impl FieldMetadata {
         }
     }
 
+    /// Returns `true` for variable-length arrays whose elements have their own
+    /// nested serializer rather than a primitive decoder.
     pub fn is_dynamic_serializer_array(&self) -> bool {
         matches!(
             self.special,
@@ -514,10 +521,14 @@ impl FieldMetadata {
         )
     }
 
+    /// Returns `true` for pointer fields, which encode only a presence bit.
     pub fn is_pointer(&self) -> bool {
         matches!(self.special, Some(FieldSpecialDescriptor::Pointer))
     }
 
+    /// Metadata for one element of a dynamic array.
+    ///
+    /// Returns the default metadata when this field is not a dynamic array.
     pub fn dynamic_array_inner_metadata(&self) -> FieldMetadata {
         match &self.special {
             Some(FieldSpecialDescriptor::DynamicArray { inner_decoder }) => FieldMetadata {

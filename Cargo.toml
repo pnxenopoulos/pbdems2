@@ -15,6 +15,9 @@ include = ["src/**", "tests/**", "Cargo.toml", "README.md", "LICENSE"]
 
 [package.metadata.docs.rs]
 all-features = true
+# Lets `doc(cfg(...))` label feature-gated items on docs.rs, which builds on
+# nightly. The cfg is never set for ordinary builds.
+rustdoc-args = ["--cfg", "docsrs"]
 
 [workspace]
 members = [".", "crates/pbdems2-bench"]
@@ -43,6 +46,9 @@ tempfile = "3.27.0"
 workspace = true
 
 [workspace.lints.rust]
+# `missing_docs` is denied per-crate in lib.rs rather than here, so it applies
+# to the library targets only and not to generated items in integration tests.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(docsrs)"] }
 unsafe_op_in_unsafe_fn = "deny"
 unused_lifetimes = "deny"
 

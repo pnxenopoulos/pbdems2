@@ -26,8 +26,13 @@ const MAX_ENTITY_INDEX: i64 = (1_i64 << MAX_EDICT_BITS) - 1;
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct PacketEntities<'a> {
+    /// Number of entity deltas encoded in `entity_data`.
     pub updated_entries: i32,
+    /// Bit-packed entity deltas, decoded by
+    /// [`EntityContainer::handle_packet_entities`].
     pub entity_data: &'a [u8],
+    /// Count of leading PVS visibility bits preceding each delta, or `0` when
+    /// the game does not send them.
     pub has_pvs_vis_bits: u32,
 }
 
@@ -443,6 +448,7 @@ pub struct EntityContainer {
 }
 
 impl EntityContainer {
+    /// Create an empty container with no entity slots reserved.
     pub fn new() -> Self {
         Self::default()
     }
@@ -993,6 +999,7 @@ impl EntityContainer {
         self.entities.iter().filter(|slot| slot.is_some()).count()
     }
 
+    /// Returns `true` when no slot holds an entity.
     pub fn is_empty(&self) -> bool {
         self.entities.iter().all(Option::is_none)
     }

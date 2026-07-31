@@ -2,7 +2,7 @@
 
 All notable changes to pbdems2 will be documented here.
 
-## Unreleased
+## v0.1.0
 
 - Prepared the initial standalone pbdems2 crate.
 - Consolidated Source 2 command framing, I/O, serializers, field decoding,
@@ -36,3 +36,15 @@ All notable changes to pbdems2 will be documented here.
   through the real Huffman decoder; the string-table suite covers history,
   sparse, fixed-width, variable-width, and compressed payloads. Production
   line coverage is 79.46%, excluding benchmark and test-support code.
+- Documented every public item, denied `missing_docs` in both library crates,
+  and added runnable examples on the crate root, `Demo`, `DecodeLimits`, and
+  `MappedDemo`.
+- Labelled feature-gated items on docs.rs with `doc(cfg(...))`.
+- Unpinned the development toolchain from the MSRV so CI genuinely tests
+  current stable on Linux, macOS, and Windows, and forced each test-matrix row
+  to its intended toolchain.
+- Fixed the fuzz workflow, which silently ran the pinned stable toolchain and a
+  musl target instead of nightly and the glibc host.
+- Made releases manual and main-only: publish is dispatched by hand, gated on
+  CI, and tags the released commit afterwards.
+- Added crates.io, docs.rs, CI, and license badges to the README.

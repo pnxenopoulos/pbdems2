@@ -1,3 +1,10 @@
+//! Field paths: the addresses entity deltas use to name a field.
+//!
+//! A packet-entities update does not repeat field names. It encodes a short
+//! sequence of Huffman-coded operations that mutate a running [`FieldPath`],
+//! and each resulting path addresses one field in the class's serializer
+//! hierarchy.
+
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::sync::LazyLock;
@@ -55,6 +62,11 @@ impl FieldPath {
         }
     }
 
+    /// Component index at `index`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is 7 or greater.
     pub fn get(&self, index: usize) -> usize {
         self.data[index] as usize
     }

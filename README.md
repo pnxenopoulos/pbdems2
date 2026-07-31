@@ -42,15 +42,17 @@ Wire conventions that differ between games are expressed through a neutral
 decode profile. A game adapter defines its own profile instead of adding a
 title name to this crate:
 
-    use pbdems2::entity::{
-        BareCharEncoding, DecodeProfile, PreciseQAngleMode,
-    };
+```rust
+use pbdems2::entity::{
+    BareCharEncoding, DecodeProfile, PreciseQAngleMode,
+};
 
-    const PROFILE: DecodeProfile = DecodeProfile::new(
-        BareCharEncoding::NullTerminatedString,
-        PreciseQAngleMode::Centered,
-    )
-    .with_ammo_field("m_iClip1");
+const PROFILE: DecodeProfile = DecodeProfile::new(
+    BareCharEncoding::NullTerminatedString,
+    PreciseQAngleMode::Centered,
+)
+.with_ammo_field("m_iClip1");
+```
 
 Additional builder methods configure symbolic array lengths, game-defined
 pointer types, and dynamic serializer-array types without hard-coding those
@@ -72,15 +74,17 @@ A consumer implements `DemoAdapter` by matching the neutral outer command,
 decoding its own generated protobuf type, and immediately passing neutral
 values to `CommandContext`:
 
-    let limits = DecodeLimits::default()
-        .with_max_command_body_bytes(32 * 1024 * 1024)
-        .with_max_packet_message_bytes(16 * 1024 * 1024);
-    let parser = DemoParser::with_limits(&demo_bytes, limits)?;
-    let index = parser.index()?;
-    let state = parser.try_run_to_end(&mut adapter, 1.0 / 64.0, |tick| {
-        consume_tick(tick.tick(), tick.entities())?;
-        Ok(())
-    })?;
+```rust
+let limits = DecodeLimits::default()
+    .with_max_command_body_bytes(32 * 1024 * 1024)
+    .with_max_packet_message_bytes(16 * 1024 * 1024);
+let parser = DemoParser::with_limits(&demo_bytes, limits)?;
+let index = parser.index()?;
+let state = parser.try_run_to_end(&mut adapter, 1.0 / 64.0, |tick| {
+    consume_tick(tick.tick(), tick.entities())?;
+    Ok(())
+})?;
+```
 
 The original `run_to_end`, `run_to_end_filtered`, and `decode_segment` methods
 accept infallible callbacks. Their `try_*` counterparts propagate the adapter's
@@ -111,16 +115,22 @@ The default `serde` feature implements `Serialize` for `FieldValue` and
 `ClassEntry`. Consumers that do not serialize decoded values can keep the
 dependency graph smaller:
 
-    pbdems2 = { version = "0.1", default-features = false }
+```toml
+pbdems2 = { version = "0.1", default-features = false }
+```
 
 The optional `mmap` feature provides `MappedDemo`, an owning read-only file map
 that lends zero-copy `Demo` and `DemoParser` views:
 
-    pbdems2 = { version = "0.1", features = ["mmap"] }
+```toml
+pbdems2 = { version = "0.1", features = ["mmap"] }
+```
 
-    // SAFETY: Keep the file unchanged and untruncated while `mapped` exists.
-    let mapped = unsafe { pbdems2::MappedDemo::open("match.dem")? };
-    let parser = mapped.parser()?;
+```rust
+// SAFETY: Keep the file unchanged and untruncated while `mapped` exists.
+let mapped = unsafe { pbdems2::MappedDemo::open("match.dem")? };
+let parser = mapped.parser()?;
+```
 
 The constructor is intentionally unsafe because every portable file-backed
 mmap API requires the caller to prevent in-process or external mutation while
@@ -131,15 +141,19 @@ transfer ownership with `MappedDemo::from_mmap`.
 
 After the first release:
 
-    [dependencies]
-    pbdems2 = "0.1"
+```toml
+[dependencies]
+pbdems2 = "0.1"
+```
 
 The parser crate can preserve its established public paths by re-exporting the
 shared implementation:
 
-    pub mod entity {
-        pub use pbdems2::entity::*;
-    }
+```rust
+pub mod entity {
+    pub use pbdems2::entity::*;
+}
+```
 
 Protobuf decoding belongs in the parser crate. Its error type should wrap both
 pbdems2::Error and prost::DecodeError.
@@ -151,17 +165,19 @@ on Linux, macOS, and Windows.
 
 Run the same checks used by CI:
 
-    cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-    cargo check -p pbdems2 --no-default-features --locked
-    cargo nextest run --workspace --all-features --locked --profile ci
-    cargo test --workspace --doc --all-features --locked
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
-    cargo deny --all-features check
-    cargo package --locked
-    cargo bench -p pbdems2-bench --no-run
-    cargo coverage
-    cargo coverage-report
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo check -p pbdems2 --no-default-features --locked
+cargo nextest run --workspace --all-features --locked --profile ci
+cargo test --workspace --doc --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+cargo deny --all-features check
+cargo package --locked
+cargo bench -p pbdems2-bench --no-run
+cargo coverage
+cargo coverage-report
+```
 
 Property tests exercise arbitrary bit offsets, varints, field paths, command
 streams, and strict entity access. Six libFuzzer targets cover command framing,
@@ -182,7 +198,9 @@ entities, string tables, class lookup, and coordinate conversion.
 
 Run the full suite locally:
 
-    cargo bench -p pbdems2-bench
+```bash
+cargo bench -p pbdems2-bench
+```
 
 See crates/pbdems2-bench/README.md for individual targets, filters, and
 Criterion baseline comparisons. CI compiles but does not time the benchmarks.

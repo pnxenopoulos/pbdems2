@@ -25,14 +25,23 @@ pub const INSTANCE_BASELINE_TABLE_NAME: &str = "instancebaseline";
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct CreateStringTable {
+    /// Table name (e.g. [`INSTANCE_BASELINE_TABLE_NAME`]).
     pub name: String,
+    /// Number of entries encoded in `string_data`.
     pub num_entries: i32,
+    /// Whether every entry carries the same user-data width.
     pub user_data_fixed_size: bool,
+    /// User-data width in bytes when `user_data_fixed_size` is set.
     pub user_data_size: i32,
+    /// User-data width in bits when `user_data_fixed_size` is set.
     pub user_data_size_bits: i32,
+    /// Protocol flags, passed through from the game message.
     pub flags: i32,
+    /// Bit-packed entry payload.
     pub string_data: Vec<u8>,
+    /// Whether `string_data` is Snappy-compressed.
     pub data_compressed: bool,
+    /// Whether user-data sizes use varint bit counts rather than a fixed width.
     pub using_varint_bitcounts: bool,
 }
 
@@ -87,8 +96,11 @@ impl CreateStringTable {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct UpdateStringTable {
+    /// Index of the table to update, in table creation order.
     pub table_id: i32,
+    /// Number of entries encoded in `string_data`.
     pub num_changed_entries: i32,
+    /// Bit-packed delta payload.
     pub string_data: Vec<u8>,
 }
 
@@ -107,7 +119,9 @@ impl UpdateStringTable {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct StringTableEntry {
+    /// Entry key, absent when the update changed only the user data.
     pub string: Option<String>,
+    /// Entry payload, absent when the table carries keys alone.
     pub user_data: Option<Vec<u8>>,
 }
 
@@ -374,6 +388,7 @@ pub struct StringTableContainer {
 }
 
 impl StringTableContainer {
+    /// Create a container holding no tables.
     pub fn new() -> Self {
         Self::default()
     }

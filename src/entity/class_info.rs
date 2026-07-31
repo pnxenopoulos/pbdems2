@@ -8,8 +8,11 @@ use crate::limits::DecodeLimits;
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[non_exhaustive]
 pub struct ClassEntry {
+    /// Numeric class ID as it appears in packet-entities updates.
     pub class_id: i32,
+    /// Networked class name (e.g. `"CCSPlayerPawn"`).
     pub network_name: String,
+    /// Name of the serializer that decodes this class's fields.
     pub table_name: String,
 }
 

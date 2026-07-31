@@ -15,15 +15,25 @@ use crate::limits::DecodeLimits;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct FlattenedField {
+    /// Index into [`FlattenedSerializer::symbols`] for the type string.
     pub var_type_sym: Option<i32>,
+    /// Index into [`FlattenedSerializer::symbols`] for the field name.
     pub var_name_sym: Option<i32>,
+    /// Bit width for quantized floats and QAngle.
     pub bit_count: Option<i32>,
+    /// Low end of a quantized float range.
     pub low_value: Option<f32>,
+    /// High end of a quantized float range.
     pub high_value: Option<f32>,
+    /// Quantized float encoding flags.
     pub encode_flags: Option<i32>,
+    /// Symbol index of the nested serializer, for composite fields.
     pub field_serializer_name_sym: Option<i32>,
+    /// Symbol index of the dotted path prefix used for field-name lookup.
     pub send_node_sym: Option<i32>,
+    /// Symbol index of an encoder hint such as `"coord"` or `"normal"`.
     pub var_encoder_sym: Option<i32>,
+    /// Whether a pointer field may hold any of several concrete types.
     pub polymorphic: bool,
 }
 
@@ -99,7 +109,9 @@ impl FlattenedField {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct FlattenedSerializerDefinition {
+    /// Index into [`FlattenedSerializer::symbols`] for this serializer's name.
     pub serializer_name_sym: Option<i32>,
+    /// Indices into [`FlattenedSerializer::fields`], in wire order.
     pub fields_index: Vec<i32>,
 }
 
@@ -117,8 +129,11 @@ impl FlattenedSerializerDefinition {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct FlattenedSerializer {
+    /// One definition per serializer, each naming its fields by index.
     pub serializers: Vec<FlattenedSerializerDefinition>,
+    /// Shared string pool that every `*_sym` index refers to.
     pub symbols: Vec<String>,
+    /// Field pool shared across all serializers in the message.
     pub fields: Vec<FlattenedField>,
 }
 
@@ -202,7 +217,9 @@ impl SerializerField {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Serializer {
+    /// Serializer name, matching [`ClassEntry::table_name`](super::ClassEntry::table_name).
     pub name: String,
+    /// Fields in wire order; a field path's first component indexes this list.
     pub fields: Vec<Arc<SerializerField>>,
 }
 

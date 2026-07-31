@@ -1,3 +1,9 @@
+//! Shared fixtures for the pbdems2 benchmark suite.
+//!
+//! Everything here builds deterministic synthetic input so benchmark runs are
+//! comparable across machines and do not depend on real demo files.
+#![deny(missing_docs)]
+
 use pbdems2::entity::field_path::FieldPath;
 use pbdems2::entity::{
     BareCharEncoding, CreateStringTable, DecodeProfile, Entity, EntityContainer, FieldValue,
@@ -5,12 +11,15 @@ use pbdems2::entity::{
     SerializerContainer,
 };
 
+/// Decode profile shared by every benchmark, so runs stay comparable.
 pub const BENCH_PROFILE: DecodeProfile = DecodeProfile::new(
     BareCharEncoding::NullTerminatedString,
     PreciseQAngleMode::Centered,
 )
 .with_ammo_field("m_ammo");
 
+/// Build a synthetic flattened-serializer message with `field_count` fields
+/// cycling through the common Source 2 field types.
 pub fn flattened_serializer(field_count: usize) -> FlattenedSerializer {
     const TYPES: [&str; 8] = [
         "uint32",
@@ -45,11 +54,13 @@ pub fn flattened_serializer(field_count: usize) -> FlattenedSerializer {
     )
 }
 
+/// Parse [`flattened_serializer`] into a ready-to-use container.
 pub fn serializer_container(field_count: usize) -> SerializerContainer {
     SerializerContainer::parse(flattened_serializer(field_count), BENCH_PROFILE)
         .expect("benchmark serializer fixture must be valid")
 }
 
+/// Build one entity at `index` populated with `field_count` decoded fields.
 pub fn entity(index: i32, field_count: usize) -> Entity {
     let mut fields = rustc_hash::FxHashMap::default();
     for field_index in 0..field_count {
@@ -83,6 +94,7 @@ pub fn entity(index: i32, field_count: usize) -> Entity {
     .expect("valid benchmark entity")
 }
 
+/// Fill a container with `slot_count` slots, occupying every `stride`-th one.
 pub fn entity_container(slot_count: usize, stride: usize, field_count: usize) -> EntityContainer {
     let mut container = EntityContainer::new();
     container
@@ -96,6 +108,7 @@ pub fn entity_container(slot_count: usize, stride: usize, field_count: usize) ->
     container
 }
 
+/// Encode `entry_count` string-table entries into a bit-packed payload.
 pub fn string_table_bits(entry_count: usize) -> Vec<u8> {
     let mut writer = BitWriter::default();
     for index in 0..entry_count {
@@ -110,6 +123,7 @@ pub fn string_table_bits(entry_count: usize) -> Vec<u8> {
     writer.finish()
 }
 
+/// Wrap [`string_table_bits`] in a create-string-table message named `name`.
 pub fn create_string_table(name: &str, entry_count: usize) -> CreateStringTable {
     CreateStringTable::new(name, entry_count as i32, string_table_bits(entry_count))
 }

@@ -16,6 +16,16 @@ use crate::playback::DemoParser;
 /// existing [`Demo`] and [`DemoParser`] APIs continue to operate on borrowed
 /// slices. Views returned by [`MappedDemo::demo`] and [`MappedDemo::parser`]
 /// cannot outlive the mapping.
+///
+/// # Example
+///
+/// ```no_run
+/// # use pbdems2::MappedDemo;
+/// // SAFETY: nothing else writes to or truncates this file while it is mapped.
+/// let mapped = unsafe { MappedDemo::open("match.dem")? };
+/// let ticks = mapped.demo()?.index()?.distinct_ticks().len();
+/// # Ok::<(), pbdems2::Error>(())
+/// ```
 #[derive(Debug)]
 pub struct MappedDemo {
     mapping: Mmap,

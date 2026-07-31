@@ -14,24 +14,46 @@ pub const COMPRESSED_FLAG: u32 = 64;
 
 /// Protocol-level outer demo command identifiers shared by Source 2 games.
 pub mod command {
+    /// `DEM_Stop`: end of the command stream.
     pub const STOP: i32 = 0;
+    /// `DEM_FileHeader`: demo-level metadata written when recording started.
     pub const FILE_HEADER: i32 = 1;
+    /// `DEM_FileInfo`: playback summary appended when recording finished.
     pub const FILE_INFO: i32 = 2;
+    /// `DEM_SyncTick`: marks the first tick of real-time playback.
     pub const SYNC_TICK: i32 = 3;
+    /// `DEM_SendTables`: flattened serializer definitions for the entity system.
     pub const SEND_TABLES: i32 = 4;
+    /// `DEM_ClassInfo`: entity class IDs paired with their network names.
     pub const CLASS_INFO: i32 = 5;
+    /// `DEM_StringTables`: a complete string-table snapshot.
     pub const STRING_TABLES: i32 = 6;
+    /// `DEM_Packet`: the network messages recorded for one tick.
     pub const PACKET: i32 = 7;
+    /// `DEM_SignonPacket`: network messages from the pre-game handshake.
     pub const SIGNON_PACKET: i32 = 8;
+    /// `DEM_ConsoleCmd`: a console command issued during recording.
     pub const CONSOLE_CMD: i32 = 9;
+    /// `DEM_CustomData`: game-defined payload with no neutral interpretation.
     pub const CUSTOM_DATA: i32 = 10;
+    /// `DEM_CustomDataCallbacks`: registry naming the custom-data payloads.
     pub const CUSTOM_DATA_CALLBACKS: i32 = 11;
+    /// `DEM_UserCmd`: recorded client input for one command number.
     pub const USER_CMD: i32 = 12;
+    /// `DEM_FullPacket`: string tables plus a packet, usable as a seek keyframe.
+    ///
+    /// [`DemoIndex::full_packets`](super::DemoIndex::full_packets) collects
+    /// every occurrence so playback can restart from any of them.
     pub const FULL_PACKET: i32 = 13;
+    /// `DEM_SaveGame`: embedded save-game blob.
     pub const SAVE_GAME: i32 = 14;
+    /// `DEM_SpawnGroups`: spawn-group load and unload events.
     pub const SPAWN_GROUPS: i32 = 15;
+    /// `DEM_AnimationData`: recorded animation samples.
     pub const ANIMATION_DATA: i32 = 16;
+    /// `DEM_AnimationHeader`: descriptor for a run of animation data.
     pub const ANIMATION_HEADER: i32 = 17;
+    /// `DEM_Recovery`: resynchronization data emitted after a recording glitch.
     pub const RECOVERY: i32 = 18;
 }
 
@@ -215,6 +237,22 @@ impl<'a> Iterator for CommandIter<'a> {
 }
 
 /// Validated borrowed PBDEMS2 file with command iteration and indexing.
+///
+/// # Example
+///
+/// ```no_run
+/// use pbdems2::demo::{Demo, command};
+///
+/// let bytes = std::fs::read("match.dem")?;
+/// let demo = Demo::new(&bytes)?;
+///
+/// let packets = demo
+///     .commands()
+///     .filter_map(Result::ok)
+///     .filter(|frame| frame.header().cmd == command::PACKET)
+///     .count();
+/// # Ok::<(), pbdems2::Error>(())
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Demo<'a> {
     data: &'a [u8],
