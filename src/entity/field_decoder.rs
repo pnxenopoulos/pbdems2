@@ -136,28 +136,44 @@ impl DecodeProfile {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Decoder {
+    /// Single bit.
     Bool,
+    /// Zigzag varint, read as signed.
     I64,
+    /// Unsigned varint.
     U64,
+    /// Fixed-width little-endian `u64`.
     U64Fixed64,
+    /// Raw 32-bit float, transmitted bit for bit.
     F32NoScale,
+    /// Simulation time: a tick count scaled by the tick interval.
     F32SimulationTime,
+    /// World coordinate in Source 2's variable-precision `bitcoord` encoding.
     F32Coord,
+    /// Unit-normal component: a sign bit plus an 11-bit fraction.
     F32Normal,
+    /// Float quantized into a fixed bit width across a bounded range.
     F32Quantized(QuantizedFloat),
     /// A configured ammo field transmitted as `actual_ammo + 1`.
     ///
     /// Decoding subtracts one while guarding against the `0` sentinel.
     Ammo,
+    /// Length-prefixed byte string, kept as raw bytes rather than `String`.
     String,
+    /// Two components, each read with the inner decoder.
     Vector2(Box<Decoder>),
+    /// Three components, each read with the inner decoder.
     Vector3(Box<Decoder>),
+    /// Three-component unit normal: two components plus a reconstructed third.
     Vector3Normal,
+    /// Four components, each read with the inner decoder.
     Vector4(Box<Decoder>),
     /// Fixed-count float vector for types wider than 4 components (e.g.
     /// `Quaternion` = 4, `CTransform` = 6). Each component uses `inner`.
     FloatVecN {
+        /// Number of components to read.
         count: usize,
+        /// Decoder applied to each component.
         inner: Box<Decoder>,
     },
     /// Length-prefixed byte blob (`CUtlBinaryBlock`): a varint byte count
@@ -167,14 +183,22 @@ pub enum Decoder {
     /// a ubitvar selecting which concrete sub-serializer is active. We keep the
     /// bool as the field value; the selector affects deeper field paths.
     Poly,
+    /// Euler angles at full precision, recentred per the decode profile's
+    /// [`PreciseQAngleMode`].
     QAnglePrecise,
+    /// Euler angles at full precision with no recentring applied.
     QAnglePreciseRaw,
+    /// Pitch and yaw only, each at `bit_count` bits; roll is zero.
     QAnglePitchYaw {
+        /// Bits per transmitted component.
         bit_count: usize,
     },
+    /// All three angles at `bit_count` bits each.
     QAngleBitCount {
+        /// Bits per component.
         bit_count: usize,
     },
+    /// Angles carried in the coordinate encoding rather than a bit count.
     QAngleCoord,
     /// Used as a placeholder/invalid decoder.
     Default,
@@ -458,9 +482,15 @@ impl Decoder {
 #[non_exhaustive]
 pub enum FieldSpecialDescriptor {
     /// Fixed-length array (e.g. `int32[4]`).
-    FixedArray { length: usize },
+    FixedArray {
+        /// Element count declared by the schema.
+        length: usize,
+    },
     /// Variable-length array of a primitive type (e.g. `CNetworkUtlVectorBase<int32>`).
-    DynamicArray { inner_decoder: Decoder },
+    DynamicArray {
+        /// Decoder applied to each element.
+        inner_decoder: Decoder,
+    },
     /// Variable-length array whose elements have a nested serializer.
     DynamicSerializerArray,
     /// Pointer / entity handle (encoded as a single boolean "present" flag).

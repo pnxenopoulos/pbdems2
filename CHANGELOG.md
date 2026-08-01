@@ -40,6 +40,9 @@ All notable changes to pbdems2 will be documented here.
   and added runnable examples on the crate root, `Demo`, `DecodeLimits`, and
   `MappedDemo`.
 - Labelled feature-gated items on docs.rs with `doc(cfg(...))`.
+- Exported `Decoder`, `FieldSpecialDescriptor`, `FieldType`, `QuantizedFloat`,
+  `INSTANCE_BASELINE_TABLE_NAME`, `get_field_metadata`, and `parse_type`, which
+  were reachable through public fields but could not be named by consumers.
 - Unpinned the development toolchain from the MSRV so CI genuinely tests
   current stable on Linux, macOS, and Windows, and forced each test-matrix row
   to its intended toolchain.

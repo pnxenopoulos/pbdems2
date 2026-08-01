@@ -22,12 +22,14 @@ pub use entities::{
     protobuf_handle_index,
 };
 pub use field_decoder::{
-    BareCharEncoding, DecodeProfile, FieldDecodeContext, FieldMetadata, PreciseQAngleMode,
+    BareCharEncoding, DecodeProfile, Decoder, FieldDecodeContext, FieldMetadata,
+    FieldSpecialDescriptor, PreciseQAngleMode, get_field_metadata,
 };
 pub use field_value::FieldValue;
+pub use quantized_float::QuantizedFloat;
 pub use serializers::{
-    FlattenedField, FlattenedSerializer, FlattenedSerializerDefinition, Serializer,
-    SerializerContainer, SerializerField,
+    FieldType, FlattenedField, FlattenedSerializer, FlattenedSerializerDefinition, Serializer,
+    SerializerContainer, SerializerField, parse_type,
 };
 pub use string_tables::{
     CreateStringTable, INSTANCE_BASELINE_TABLE_NAME, StringTable, StringTableContainer,
