@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
@@ -139,7 +140,10 @@ pub struct Entity {
     /// Numeric class ID (indexes into [`ClassInfo`]).
     pub class_id: i32,
     /// Network class name (e.g. `"CBasePlayerPawn"`).
-    pub class_name: String,
+    ///
+    /// Shared with [`ClassInfo`] rather than owned, so creating an entity does
+    /// not allocate a fresh copy of a name the class table already holds.
+    pub class_name: Arc<str>,
     /// Whether the entity is currently in the client's PVS.
     ///
     /// An entity that leaves the PVS (delta command `0b01`) is kept in the
@@ -157,7 +161,7 @@ impl Entity {
         index: i32,
         serial: u32,
         class_id: i32,
-        class_name: impl Into<String>,
+        class_name: impl Into<Arc<str>>,
         active: bool,
         fields: FxHashMap<u64, FieldValue>,
     ) -> Result<Self> {
@@ -176,7 +180,7 @@ impl Entity {
         })
     }
 
-    fn new(index: i32, class_id: i32, class_name: String) -> Self {
+    fn new(index: i32, class_id: i32, class_name: Arc<str>) -> Self {
         Self {
             index,
             serial: 0,
@@ -782,7 +786,7 @@ impl EntityContainer {
                     context: format!("no serializer for {}", class_entry.network_name),
                 })?;
 
-        let mut entity = Entity::new(index, class_id, class_entry.network_name.clone());
+        let mut entity = Entity::new(index, class_id, Arc::clone(&class_entry.network_name));
         // Pre-size the field map to the class's field count: a create applies the
         // baseline plus the create delta, setting many fields at once, so starting
         // from an empty map otherwise rehashes repeatedly as it grows.
@@ -879,7 +883,7 @@ impl EntityContainer {
         // previous occupant of the slot (e.g. a tracked weapon that left the PVS
         // and stayed cached while the slot was reused by a skipped entity). This
         // matters because leaves keep entities around, so slots get reused.
-        if !class_filter.contains(class_entry.network_name.as_str()) {
+        if !class_filter.contains(class_entry.network_name.as_ref()) {
             // Skip this entity - just advance the bit reader, but track its
             // class_id so later updates to it can be skipped correctly.
             self.take_entity(index);
@@ -890,7 +894,7 @@ impl EntityContainer {
         self.set_skipped(index, None);
 
         // Full processing for filtered entities
-        let mut entity = Entity::new(index, class_id, class_entry.network_name.clone());
+        let mut entity = Entity::new(index, class_id, Arc::clone(&class_entry.network_name));
         // Pre-size the field map to the class's field count: a create applies the
         // baseline plus the create delta, setting many fields at once, so starting
         // from an empty map otherwise rehashes repeatedly as it grows.
@@ -1022,7 +1026,7 @@ mod tests {
 
     #[test]
     fn entity_fields_insert_and_get() {
-        let mut e = Entity::new(1, 10, "TestClass".to_string());
+        let mut e = Entity::new(1, 10, "TestClass".into());
         e.fields.insert(42, FieldValue::I32(100));
         assert!(matches!(e.fields.get(&42), Some(FieldValue::I32(100))));
     }
@@ -1030,29 +1034,29 @@ mod tests {
     #[test]
     fn container_insert_and_iter() {
         let mut c = EntityContainer::new();
-        let e = Entity::new(5, 10, "Hero".to_string());
+        let e = Entity::new(5, 10, "Hero".into());
         c.put_entity(5, e);
         assert_eq!(c.len(), 1);
         assert!(!c.is_empty());
         assert!(c.get(5).is_some());
-        assert_eq!(c.get(5).unwrap().class_name, "Hero");
+        assert_eq!(&*c.get(5).unwrap().class_name, "Hero");
     }
 
     #[test]
     fn container_iter_yields_entries() {
         let mut c = EntityContainer::new();
-        c.put_entity(1, Entity::new(1, 1, "A".to_string()));
-        c.put_entity(2, Entity::new(2, 2, "B".to_string()));
+        c.put_entity(1, Entity::new(1, 1, "A".into()));
+        c.put_entity(2, Entity::new(2, 2, "B".into()));
         let keys: Vec<i32> = c.iter().map(|(k, _)| k).collect();
         assert_eq!(keys.len(), 2);
     }
 
     #[test]
     fn entity_basic_fields() {
-        let e = Entity::new(7, 42, "NPC".to_string());
+        let e = Entity::new(7, 42, "NPC".into());
         assert_eq!(e.index, 7);
         assert_eq!(e.class_id, 42);
-        assert_eq!(e.class_name, "NPC");
+        assert_eq!(&*e.class_name, "NPC");
         assert_eq!(e.serial, 0);
         assert!(e.fields.is_empty());
     }

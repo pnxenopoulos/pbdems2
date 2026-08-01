@@ -203,13 +203,13 @@ fn validates_entity_and_container_indices_and_tracks_replacements() {
             .is_err()
     );
 
-    let first = Entity::new(2, 1, "First".to_owned());
+    let first = Entity::new(2, 1, "First".into());
     assert!(container.insert(first).unwrap().is_none());
-    let second = Entity::new(2, 2, "Second".to_owned());
+    let second = Entity::new(2, 2, "Second".into());
     let replaced = container.insert(second).unwrap().expect("previous entity");
-    assert_eq!(replaced.class_name, "First");
+    assert_eq!(&*replaced.class_name, "First");
     assert_eq!(
-        container.get_by_handle((9 << 14) | 2).unwrap().class_name,
+        &*container.get_by_handle((9 << 14) | 2).unwrap().class_name,
         "Second"
     );
     assert_eq!(container.updated_indices(), &[2, 2]);
@@ -322,9 +322,7 @@ fn filtered_packets_track_selected_classes_and_skip_other_updates() {
     let serializer_container = serializers();
     let tables = StringTableContainer::new();
     let mut entities = EntityContainer::new();
-    entities
-        .insert(Entity::new(2, 99, "stale".to_owned()))
-        .unwrap();
+    entities.insert(Entity::new(2, 99, "stale".into())).unwrap();
     entities.clear_updated();
     let empty_filter = HashSet::new();
 
@@ -380,7 +378,7 @@ fn filtered_leave_and_delete_keep_then_clear_skipped_class_state() {
     entities.handle_leave_filtered(3, true);
     assert_eq!(entities.skipped_class(3), None);
 
-    entities.put_entity(3, Entity::new(3, 0, "CTest".to_owned()));
+    entities.put_entity(3, Entity::new(3, 0, "CTest".into()));
     entities.handle_leave_filtered(3, false);
     assert!(!entities.get(3).unwrap().active);
     entities.handle_leave_filtered(3, true);

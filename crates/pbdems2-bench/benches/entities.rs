@@ -2,9 +2,15 @@ use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use pbdems2::entity::field_path::FieldPath;
-use pbdems2::entity::{ClassEntry, ClassInfo, ENTITY_HANDLE_INDEX_MASK};
+use pbdems2::entity::{
+    ClassEntry, ClassInfo, ENTITY_HANDLE_INDEX_MASK, EntityContainer, FieldDecodeContext,
+    PacketEntities, StringTableContainer,
+};
 use pbdems2::position::cell_to_world;
-use pbdems2_bench::{entity_container, serializer_container};
+use pbdems2_bench::{
+    bench_class_info, bool_serializer_container, entity_container, packet_entity_creates,
+    packet_entity_updates, populated_container, serializer_container,
+};
 
 const SLOT_COUNT: usize = 16_384;
 
@@ -163,11 +169,71 @@ fn handle_mask_benchmark(criterion: &mut Criterion) {
     );
 }
 
+/// The decode hot path: `handle_packet_entities` over a whole tick's worth of
+/// entity deltas. Every other benchmark in this file measures reads of entities
+/// that are *already* decoded; this one measures producing them.
+fn packet_entities_benchmarks(criterion: &mut Criterion) {
+    const ENTITY_COUNT: usize = 512;
+    const FIELD_COUNT: usize = 16;
+
+    let classes = bench_class_info();
+    let serializers = bool_serializer_container(FIELD_COUNT);
+    let tables = StringTableContainer::new();
+    let creates = packet_entity_creates(ENTITY_COUNT, FIELD_COUNT);
+    let updates = packet_entity_updates(ENTITY_COUNT, FIELD_COUNT);
+
+    let mut group = criterion.benchmark_group("packet_entities");
+    group.throughput(Throughput::Elements(ENTITY_COUNT as u64));
+
+    group.bench_function("decode_creates_512x16", |bencher| {
+        bencher.iter(|| {
+            let mut container = EntityContainer::new();
+            container.reserve_slots(ENTITY_COUNT).expect("valid slots");
+            let mut context = FieldDecodeContext::new(1.0 / 64.0);
+            let mut paths = Vec::new();
+            container
+                .handle_packet_entities(
+                    PacketEntities::new(ENTITY_COUNT as i32, black_box(&creates), 0),
+                    &classes,
+                    &serializers,
+                    &tables,
+                    &mut context,
+                    &mut paths,
+                )
+                .expect("creates decode");
+            black_box(container.len())
+        });
+    });
+
+    group.bench_function("decode_updates_512x16", |bencher| {
+        let mut container = populated_container(ENTITY_COUNT, FIELD_COUNT);
+        let mut context = FieldDecodeContext::new(1.0 / 64.0);
+        let mut paths = Vec::new();
+        bencher.iter(|| {
+            container
+                .handle_packet_entities(
+                    PacketEntities::new(ENTITY_COUNT as i32, black_box(&updates), 0),
+                    &classes,
+                    &serializers,
+                    &tables,
+                    &mut context,
+                    &mut paths,
+                )
+                .expect("updates decode");
+            container.clear_updated();
+            black_box(container.len())
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     entity_container_benchmarks,
     entity_field_benchmarks,
     class_and_position_benchmarks,
-    handle_mask_benchmark
+    handle_mask_benchmark,
+    packet_entities_benchmarks
 );
 criterion_main!(benches);

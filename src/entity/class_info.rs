@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use rustc_hash::FxHashMap;
 
 use crate::error::{Error, Result};
@@ -11,7 +13,10 @@ pub struct ClassEntry {
     /// Numeric class ID as it appears in packet-entities updates.
     pub class_id: i32,
     /// Networked class name (e.g. `"CCSPlayerPawn"`).
-    pub network_name: String,
+    ///
+    /// Shared rather than owned: every entity create copies this name, so an
+    /// `Arc<str>` makes that a refcount bump instead of a heap allocation.
+    pub network_name: Arc<str>,
     /// Name of the serializer that decodes this class's fields.
     pub table_name: String,
 }
@@ -20,7 +25,7 @@ impl ClassEntry {
     /// Construct a neutral class entry from a game protobuf adapter.
     pub fn new(
         class_id: i32,
-        network_name: impl Into<String>,
+        network_name: impl Into<Arc<str>>,
         table_name: impl Into<String>,
     ) -> Self {
         Self {
@@ -37,7 +42,7 @@ pub struct ClassInfo {
     classes: Vec<ClassEntry>,
     bits: usize,
     lookup: Vec<Option<usize>>,
-    name_lookup: FxHashMap<String, i32>,
+    name_lookup: FxHashMap<Arc<str>, i32>,
 }
 
 impl ClassInfo {
@@ -142,7 +147,7 @@ impl ClassInfo {
     /// Get the network name for a numeric class ID.
     pub fn name_by_id(&self, class_id: i32) -> Option<&str> {
         self.by_id(class_id)
-            .map(|class| class.network_name.as_str())
+            .map(|class| class.network_name.as_ref())
     }
 
     /// Find a numeric class ID by network name in constant time.

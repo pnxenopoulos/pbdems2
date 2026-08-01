@@ -40,6 +40,11 @@ All notable changes to pbdems2 will be documented here.
   and added runnable examples on the crate root, `Demo`, `DecodeLimits`, and
   `MappedDemo`.
 - Labelled feature-gated items on docs.rs with `doc(cfg(...))`.
+- Benchmarked `handle_packet_entities`, the entity decode hot path, which the
+  suite previously did not cover at all.
+- Shared class names as `Arc<str>` on `ClassEntry` and `Entity` instead of
+  allocating a fresh `String` per entity create, cutting create-heavy packet
+  decoding by roughly 14%.
 - Exported `Decoder`, `FieldSpecialDescriptor`, `FieldType`, `QuantizedFloat`,
   `INSTANCE_BASELINE_TABLE_NAME`, `get_field_metadata`, and `parse_type`, which
   were reachable through public fields but could not be named by consumers.
