@@ -11,6 +11,7 @@ use crate::entity::{
 };
 use crate::error::{Error, Result};
 use crate::limits::DecodeLimits;
+use crate::packet::PacketMessageIter;
 
 /// Complete game-neutral parser state at a point in demo playback.
 #[derive(Clone)]
@@ -135,6 +136,16 @@ impl<'state, 'filter> CommandContext<'state, 'filter> {
             size,
             self.limits.max_packet_message_bytes(),
         )
+    }
+
+    /// Iterate the game-neutral message framing inside a packet payload.
+    ///
+    /// The adapter still decides which generated protobuf type corresponds to
+    /// each message identifier. Unaligned payloads can be copied into one
+    /// reusable buffer with
+    /// [PacketMessageFrame::copy_payload](crate::packet::PacketMessageFrame::copy_payload).
+    pub fn packet_messages<'packet>(&self, data: &'packet [u8]) -> PacketMessageIter<'packet> {
+        PacketMessageIter::with_limits(data, self.limits)
     }
 
     /// Parse and install flattened serializers.

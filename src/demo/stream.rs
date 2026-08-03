@@ -4,7 +4,7 @@ use crate::limits::DecodeLimits;
 
 #[cfg(test)]
 use super::MAGIC;
-use super::{CmdHeader, read_cmd_body_with_limits, read_cmd_header, verify_header};
+use super::{CmdHeader, DemoHeader, read_cmd_body_with_limits, read_cmd_header};
 
 /// Fixed number of bytes before the first PBDEMS2 command.
 pub const HEADER_SIZE: usize = 16;
@@ -257,6 +257,7 @@ impl<'a> Iterator for CommandIter<'a> {
 pub struct Demo<'a> {
     data: &'a [u8],
     limits: DecodeLimits,
+    header: DemoHeader,
 }
 
 impl<'a> Demo<'a> {
@@ -267,8 +268,17 @@ impl<'a> Demo<'a> {
 
     /// Validate and borrow a complete PBDEMS2 file with custom limits.
     pub fn with_limits(data: &'a [u8], limits: DecodeLimits) -> Result<Self> {
-        verify_header(data, HEADER_SIZE)?;
-        Ok(Self { data, limits })
+        let header = DemoHeader::parse(data)?;
+        Ok(Self {
+            data,
+            limits,
+            header,
+        })
+    }
+
+    /// Parsed fixed PBDEMS2 file header.
+    pub const fn header(&self) -> DemoHeader {
+        self.header
     }
 
     /// Complete encoded file bytes.

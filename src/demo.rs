@@ -14,6 +14,63 @@ pub use stream::{
 /// Magic bytes at the beginning of every Source 2 demo.
 pub const MAGIC: [u8; 8] = *b"PBDEMS2\0";
 
+/// Parsed fields from the fixed 16-byte PBDEMS2 file header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DemoHeader {
+    file_info_offset: Option<usize>,
+    spawn_groups_offset: Option<usize>,
+}
+
+impl DemoHeader {
+    /// Parse the magic prefix and validate both optional command offsets.
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        verify_header(data, HEADER_SIZE)?;
+        Ok(Self {
+            file_info_offset: read_optional_header_offset(data, 8, "file-info")?,
+            spawn_groups_offset: read_optional_header_offset(data, 12, "spawn-groups")?,
+        })
+    }
+
+    /// Absolute offset of DEM_FileInfo, or None when the header stores zero.
+    pub const fn file_info_offset(&self) -> Option<usize> {
+        self.file_info_offset
+    }
+
+    /// Absolute offset of DEM_SpawnGroups, or None when the header stores zero.
+    pub const fn spawn_groups_offset(&self) -> Option<usize> {
+        self.spawn_groups_offset
+    }
+}
+
+fn read_optional_header_offset(
+    data: &[u8],
+    start: usize,
+    field: &'static str,
+) -> Result<Option<usize>> {
+    let raw = u32::from_le_bytes([
+        data[start],
+        data[start + 1],
+        data[start + 2],
+        data[start + 3],
+    ]);
+    if raw == 0 {
+        return Ok(None);
+    }
+    let offset = usize::try_from(raw).map_err(|_| Error::Parse {
+        context: format!("{field} header offset {raw} does not fit this platform"),
+    })?;
+    if !(HEADER_SIZE..data.len()).contains(&offset) {
+        return Err(Error::Parse {
+            context: format!(
+                "{field} header offset {offset} outside command stream {HEADER_SIZE}..{}",
+                data.len()
+            ),
+        });
+    }
+    Ok(Some(offset))
+}
+
 /// Header shared by every command in a demo stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -129,6 +186,41 @@ pub fn read_cmd_body_with_limits(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_and_bounds_checks_fixed_header_offsets() {
+        let mut data = Vec::from(MAGIC);
+        data.resize(64, 0);
+        data[8..12].copy_from_slice(&32_u32.to_le_bytes());
+        data[12..16].copy_from_slice(&48_u32.to_le_bytes());
+
+        let header = Demo::new(&data).expect("valid header").header();
+        assert_eq!(header.file_info_offset(), Some(32));
+        assert_eq!(header.spawn_groups_offset(), Some(48));
+
+        data[8..12].copy_from_slice(&8_u32.to_le_bytes());
+        assert!(matches!(
+            DemoHeader::parse(&data),
+            Err(Error::Parse { context }) if context.contains("file-info header offset 8")
+        ));
+
+        data[8..12].fill(0);
+        let end_offset = data.len() as u32;
+        data[12..16].copy_from_slice(&end_offset.to_le_bytes());
+        assert!(matches!(
+            DemoHeader::parse(&data),
+            Err(Error::Parse { context }) if context.contains("spawn-groups header offset 64")
+        ));
+    }
+
+    #[test]
+    fn zero_header_offsets_are_absent() {
+        let mut data = Vec::from(MAGIC);
+        data.resize(HEADER_SIZE, 0);
+        let header = DemoHeader::parse(&data).expect("valid header");
+        assert_eq!(header.file_info_offset(), None);
+        assert_eq!(header.spawn_groups_offset(), None);
+    }
 
     #[test]
     fn validates_header() {

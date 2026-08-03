@@ -2,11 +2,13 @@
 
 # pbdems2
 
-[![crates.io](https://img.shields.io/crates/v/pbdems2.svg)](https://crates.io/crates/pbdems2)
-[![crates.io Downloads](https://img.shields.io/crates/d/pbdems2.svg)](https://crates.io/crates/pbdems2)
-[![docs.rs](https://docs.rs/pbdems2/badge.svg)](https://docs.rs/pbdems2)
-[![CI](https://img.shields.io/github/actions/workflow/status/pnxenopoulos/pbdems2/ci.yml?branch=main)](https://github.com/pnxenopoulos/pbdems2/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/pnxenopoulos/pbdems2/blob/main/LICENSE)
+<p>
+  <a href="https://crates.io/crates/pbdems2"><img src="https://img.shields.io/crates/v/pbdems2.svg?style=for-the-badge" alt="crates.io"></a>
+  <a href="https://crates.io/crates/pbdems2"><img src="https://img.shields.io/crates/d/pbdems2.svg?style=for-the-badge" alt="crates.io Downloads"></a>
+  <a href="https://docs.rs/pbdems2"><img src="https://img.shields.io/docsrs/pbdems2?style=for-the-badge" alt="docs.rs"></a>
+  <a href="https://github.com/pnxenopoulos/pbdems2/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/pnxenopoulos/pbdems2/ci.yml?branch=main&style=for-the-badge" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge" alt="License: MIT"></a>
+</p>
 
 </div>
 
@@ -20,8 +22,9 @@ Some projects that use pbdems2 are [Boon (Deadlock)](https://github.com/pnxenopo
 
 pbdems2 owns:
 
-- PBDEMS2 header validation and command framing
+- complete fixed PBDEMS2 header validation and outer-command framing
 - byte- and bit-level Source 2 readers
+- limit-aware inner packet-message framing
 - Snappy command-body decompression
 - flattened serializer graphs and field paths
 - configurable field decoding
@@ -70,6 +73,10 @@ header-only `DemoIndex`. `DemoParser` adds signon initialization, tick
 callbacks, full-packet seeking, segmented playback, and optional entity-class
 filtering while remaining independent of Prost and every game schema.
 
+`Demo::header` exposes the validated file-info and spawn-groups offsets from
+the fixed header; zero offsets are represented as `None` and nonzero offsets
+must point inside the command stream.
+
 A consumer implements `DemoAdapter` by matching the neutral outer command,
 decoding its own generated protobuf type, and immediately passing neutral
 values to `CommandContext`:
@@ -91,10 +98,20 @@ accept infallible callbacks. Their `try_*` counterparts propagate the adapter's
 application error type, allowing tick consumers to stop playback on output,
 database, cancellation, or other processing failures.
 
+`CommandContext::packet_messages` iterates the common ubitvar type, varint
+length, and payload framing inside packet commands without interpreting game
+message identifiers. Byte-aligned payloads are borrowed directly; bit-unaligned
+payloads can be copied with `PacketMessageFrame::copy_payload` into one reusable
+consumer-owned buffer. Both paths enforce `max_packet_message_bytes` before
+protobuf decoding or allocation.
+
 The adapter owns protobuf decoding; `CommandContext` owns validated mutation
 of serializers, classes, string tables, entity deltas, and tick interval.
 `parse_to_tick` restores the nearest preceding full packet and replays only
 the necessary deltas.
+
+A proposed cache for repeated playback and seeking is specified in
+the [prepared playback plan](https://github.com/pnxenopoulos/pbdems2/blob/main/docs/prepared-demo-plan.md).
 
 ## Decode limits
 
@@ -158,6 +175,27 @@ pub mod entity {
 Protobuf decoding belongs in the parser crate. Its error type should wrap both
 pbdems2::Error and prost::DecodeError.
 
+## Command-line inspector
+
+The private `pbdems2-cli` workspace crate installs a `pbdems2` binary. It
+uses a read-only memory map, validates the complete PBDEMS2 header and every
+command frame, and decompresses every body before reporting sizes:
+
+```bash
+cargo run -p pbdems2-cli -- summary match.dem
+cargo run -p pbdems2-cli -- commands match.dem
+cargo run -p pbdems2-cli -- index match.dem
+cargo run -p pbdems2-cli -- validate match.dem
+```
+
+Add `--json` to any command for scripting. The summary includes command and
+tick counts, fixed-header file-info and spawn-groups offsets, encoded and
+decoded body sizes, aggregate compression ratios, unknown/trailing commands,
+and stop-command information. The index view lists
+sync-tick resume offsets and post-sync full-packet seek points. Release
+archives provide native binaries for Linux x86-64, macOS Intel and Apple
+Silicon, and Windows x86-64; the CLI crate itself is not published to crates.io.
+
 ## Development
 
 The minimum supported Rust version is 1.88.0. CI also tests current stable Rust
@@ -185,7 +223,7 @@ bit reads, field paths, serializers, string tables, and entity deltas; see
 `fuzz/README.md` and run `cargo +nightly fuzz build` to compile all of them.
 
 Coverage uses cargo-llvm-cov with cargo-nextest. CI exports an LCOV artifact and
-enforces a 75% line floor against a measured 79.46% baseline. Benchmark and
+enforces a 75% line floor against a measured 81.17% baseline. Benchmark and
 test-support modules are excluded from that percentage so helpers cannot inflate
 the production-code measurement. The floor should be ratcheted upward as field
 decoder, serializer, bit-reader, and playback error-path coverage improves.

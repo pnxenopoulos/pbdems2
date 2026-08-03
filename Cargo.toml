@@ -20,7 +20,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [workspace]
-members = [".", "crates/pbdems2-bench"]
+members = [".", "crates/pbdems2-bench", "crates/pbdems2-cli"]
 default-members = ["."]
 exclude = ["fuzz"]
 resolver = "3"

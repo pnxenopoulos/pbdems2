@@ -63,6 +63,17 @@ pub enum Error {
         #[source]
         source: Box<Error>,
     },
+    /// Wraps a failure with the position and type of an inner packet message.
+    #[error("packet message at bit {bit_offset} (type {message_type:?}): {source}")]
+    PacketMessage {
+        /// Bit offset of the message-type header within its packet payload.
+        bit_offset: usize,
+        /// Message identifier, when framing was read far enough to know it.
+        message_type: Option<u32>,
+        /// The underlying framing, limit, allocation, or payload-copy failure.
+        #[source]
+        source: Box<Error>,
+    },
     /// The bitstream was structurally valid but semantically inconsistent,
     /// which normally means an earlier decode desynced.
     #[error("parse error: {context}")]

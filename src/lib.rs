@@ -38,6 +38,7 @@ pub mod limits;
 #[cfg(feature = "mmap")]
 #[cfg_attr(docsrs, doc(cfg(feature = "mmap")))]
 pub mod mmap;
+pub mod packet;
 pub mod playback;
 pub mod position;
 
@@ -50,4 +51,5 @@ pub use limits::DecodeLimits;
 #[cfg(feature = "mmap")]
 #[cfg_attr(docsrs, doc(cfg(feature = "mmap")))]
 pub use mmap::MappedDemo;
+pub use packet::{PacketMessageFrame, PacketMessageIter};
 pub use playback::{CommandContext, DemoAdapter, DemoParser, ParserState};

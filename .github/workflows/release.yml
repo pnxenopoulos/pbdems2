@@ -55,6 +55,11 @@ jobs:
         run: |
           version=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "pbdems2") | .version')
           echo "Releasing pbdems2 $version from $GITHUB_SHA"
+          cli_version=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "pbdems2-cli") | .version')
+          if [ "$cli_version" != "$version" ]; then
+            echo "pbdems2-cli $cli_version does not match pbdems2 $version"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Require an unused tag
@@ -76,7 +81,7 @@ jobs:
 
   publish:
     name: Publish pbdems2
-    needs: ci-gate
+    needs: [ci-gate, build-cli]
     runs-on: ubuntu-latest
     environment: crates
     permissions:
@@ -120,9 +125,101 @@ jobs:
             cargo publish --locked
           fi
 
+  build-cli:
+    name: Build CLI (${{ matrix.target }})
+    needs: ci-gate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build the CLI
+        run: cargo build --locked --release -p pbdems2-cli --target ${{ matrix.target }}
+
+      - name: Smoke-test the CLI
+        if: runner.os != 'Windows'
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.ci-gate.outputs.version }}
+        run: |
+          output=$("target/$TARGET/release/pbdems2" --version)
+          test "$output" = "pbdems2 $VERSION"
+
+      - name: Smoke-test the CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.ci-gate.outputs.version }}
+        run: |
+          $output = & "target/$env:TARGET/release/pbdems2.exe" --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "pbdems2 --version exited with $LASTEXITCODE"
+          }
+          if ($output -ne "pbdems2 $env:VERSION") {
+            throw "unexpected version output: $output"
+          }
+
+      - name: Package the CLI
+        if: runner.os != 'Windows'
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.ci-gate.outputs.version }}
+        run: |
+          archive="pbdems2-v$VERSION-$TARGET"
+          mkdir -p "stage/$archive" dist
+          install -m 755 "target/$TARGET/release/pbdems2" "stage/$archive/pbdems2"
+          cp LICENSE README.md "stage/$archive/"
+          tar -C stage -czf "dist/$archive.tar.gz" "$archive"
+          (cd dist && shasum -a 256 "$archive.tar.gz" > "$archive.tar.gz.sha256")
+
+      - name: Package the CLI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.ci-gate.outputs.version }}
+        run: |
+          $archive = "pbdems2-v$env:VERSION-$env:TARGET"
+          New-Item -ItemType Directory -Force -Path "stage/$archive", dist | Out-Null
+          Copy-Item "target/$env:TARGET/release/pbdems2.exe" "stage/$archive/pbdems2.exe"
+          Copy-Item LICENSE, README.md "stage/$archive/"
+          Compress-Archive -Path "stage/$archive" -DestinationPath "dist/$archive.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "dist/$archive.zip").Hash.ToLowerInvariant()
+          "$hash  $archive.zip" | Set-Content -Encoding ascii "dist/$archive.zip.sha256"
+
+      - name: Upload the CLI archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: pbdems2-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
   tag:
     name: Tag the release
-    needs: [ci-gate, publish]
+    needs: [ci-gate, publish, build-cli]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -147,3 +244,36 @@ jobs:
             -f ref="refs/tags/$TAG_NAME" \
             -f sha="$COMMIT_SHA" > /dev/null
           echo "Tagged $COMMIT_SHA as $TAG_NAME"
+  github-release:
+    name: Publish GitHub release
+    needs: [ci-gate, tag, build-cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download CLI archives
+        uses: actions/download-artifact@v5
+        with:
+          pattern: pbdems2-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create combined checksums
+        run: cat dist/*.sha256 | sort > dist/SHA256SUMS
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG_NAME: v${{ needs.ci-gate.outputs.version }}
+          VERSION: ${{ needs.ci-gate.outputs.version }}
+        run: |
+          if gh release view "$TAG_NAME" --repo "$REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG_NAME" dist/* --clobber --repo "$REPOSITORY"
+          else
+            gh release create "$TAG_NAME" dist/* \
+              --verify-tag \
+              --title "pbdems2 $VERSION" \
+              --generate-notes \
+              --repo "$REPOSITORY"
+          fi
