@@ -322,8 +322,10 @@ impl<'a> Demo<'a> {
             let frame = frame?;
             let header = frame.header();
             if header.cmd == command::SYNC_TICK {
+                if !past_sync {
+                    index.stream_start = Some(frame.end_offset());
+                }
                 past_sync = true;
-                index.stream_start = Some(frame.end_offset());
                 continue;
             }
             if header.cmd == command::STOP {
@@ -381,10 +383,11 @@ mod tests {
     }
 
     #[test]
-    fn indexes_sync_ticks_and_full_packets() {
+    fn indexes_first_sync_ticks_and_full_packets() {
         let mut commands = command(command::SYNC_TICK as u8, 0, &[]);
         let expected_start = HEADER_SIZE + commands.len();
         commands.extend(command(command::PACKET as u8, 1, &[]));
+        commands.extend(command(command::SYNC_TICK as u8, 1, &[]));
         let full_offset = HEADER_SIZE + commands.len();
         commands.extend(command(command::FULL_PACKET as u8, 2, &[]));
         commands.extend(command(command::PACKET as u8, 2, &[]));

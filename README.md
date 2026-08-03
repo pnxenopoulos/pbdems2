@@ -77,6 +77,37 @@ Unaligned payloads can be copied into one reusable buffer.
 `Demo::header` exposes validated file-info and spawn-groups offsets.
 `parse_to_tick` starts at the nearest full packet and replays the needed deltas.
 
+## Prepared playback
+
+Adapters that implement `CheckpointAdapter` can decode signon and build the
+seek index once, then create independent sessions for repeated or parallel
+work:
+
+```rust
+let prepared = parser.prepare(adapter, 1.0 / 64.0)?;
+
+let state = prepared
+    .session(parser)?
+    .try_run_to_end(|tick| {
+        consume_tick(tick.tick(), tick.entities())?;
+        Ok(())
+    })?;
+```
+
+`PreparedPlayback` does not borrow the encoded bytes, so an owning game parser
+can cache it without becoming self-referential. Each session verifies that its
+`DemoParser` uses the same allocation and decode limits, then clones neutral
+state and restores a fresh adapter from the signon checkpoint.
+
+Use `try_run_to_end_with_adapter` and the corresponding filtered or segment
+methods when a callback also needs game-specific adapter state. This supports a
+single entity-and-event pass without putting generated messages or event types
+in pbdems2.
+
+Prepared values can be shared across threads when their checkpoint state is
+`Send + Sync`. Full-packet segment restarts are exact only for classes that the
+game fully re-keyframes in those snapshots.
+
 ## Limits and large files
 
 `DecodeLimits` bounds untrusted lengths and counts before allocation. Limit,
@@ -85,7 +116,7 @@ allocation, command, and packet errors keep useful context.
 The optional `mmap` feature provides an owning read-only map:
 
 ```toml
-pbdems2 = { version = "0.1", features = ["mmap"] }
+pbdems2 = { version = "0.2", features = ["mmap"] }
 ```
 
 ```rust
@@ -100,14 +131,14 @@ The constructor is unsafe because the caller must keep the mapped file stable.
 
 ```toml
 [dependencies]
-pbdems2 = "0.1"
+pbdems2 = "0.2"
 ```
 
 Serde support is on by default. Turn it off if you do not serialize decoded
 values:
 
 ```toml
-pbdems2 = { version = "0.1", default-features = false }
+pbdems2 = { version = "0.2", default-features = false }
 ```
 
 Consumer crates can keep old module paths with re-exports:

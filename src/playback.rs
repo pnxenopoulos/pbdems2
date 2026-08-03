@@ -2,6 +2,10 @@
 
 use std::collections::HashSet;
 
+mod prepared;
+
+pub use prepared::{CheckpointAdapter, PlaybackSession, PreparedPlayback};
+
 use crate::demo::{CommandFrame, Demo, DemoIndex, command};
 use crate::entity::field_path::FieldPath;
 use crate::entity::{
@@ -338,6 +342,44 @@ impl<'a> DemoParser<'a> {
         A: DemoAdapter,
         F: FnMut(&ParserState) -> std::result::Result<(), A::Error>,
     {
+        let mut on_tick = on_tick;
+        self.run_to_end_impl(adapter, default_tick_interval, None, |state, _| {
+            on_tick(state)
+        })
+    }
+
+    /// Decode all commands and expose game-specific adapter state at each tick.
+    pub fn run_to_end_with_adapter<A, F>(
+        &self,
+        adapter: &mut A,
+        default_tick_interval: f32,
+        on_tick: F,
+    ) -> std::result::Result<ParserState, A::Error>
+    where
+        A: DemoAdapter,
+        F: FnMut(&ParserState, &mut A),
+    {
+        let mut on_tick = on_tick;
+        self.try_run_to_end_with_adapter(adapter, default_tick_interval, |state, adapter| {
+            on_tick(state, adapter);
+            Ok(())
+        })
+    }
+
+    /// Fallible playback with mutable adapter access at each completed tick.
+    ///
+    /// This supports consumers that collect game-specific state, such as
+    /// per-tick events, inside their protobuf adapter.
+    pub fn try_run_to_end_with_adapter<A, F>(
+        &self,
+        adapter: &mut A,
+        default_tick_interval: f32,
+        on_tick: F,
+    ) -> std::result::Result<ParserState, A::Error>
+    where
+        A: DemoAdapter,
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
+    {
         self.run_to_end_impl(adapter, default_tick_interval, None, on_tick)
     }
 
@@ -372,6 +414,51 @@ impl<'a> DemoParser<'a> {
         A: DemoAdapter,
         F: FnMut(&ParserState) -> std::result::Result<(), A::Error>,
     {
+        let mut on_tick = on_tick;
+        self.run_to_end_impl(
+            adapter,
+            default_tick_interval,
+            Some(class_filter),
+            |state, _| on_tick(state),
+        )
+    }
+
+    /// Filter entities and expose mutable adapter state at each completed tick.
+    pub fn run_to_end_filtered_with_adapter<A, F>(
+        &self,
+        adapter: &mut A,
+        default_tick_interval: f32,
+        class_filter: &HashSet<&str>,
+        on_tick: F,
+    ) -> std::result::Result<ParserState, A::Error>
+    where
+        A: DemoAdapter,
+        F: FnMut(&ParserState, &mut A),
+    {
+        let mut on_tick = on_tick;
+        self.try_run_to_end_filtered_with_adapter(
+            adapter,
+            default_tick_interval,
+            class_filter,
+            |state, adapter| {
+                on_tick(state, adapter);
+                Ok(())
+            },
+        )
+    }
+
+    /// Fallible filtered playback with mutable adapter access at each tick.
+    pub fn try_run_to_end_filtered_with_adapter<A, F>(
+        &self,
+        adapter: &mut A,
+        default_tick_interval: f32,
+        class_filter: &HashSet<&str>,
+        on_tick: F,
+    ) -> std::result::Result<ParserState, A::Error>
+    where
+        A: DemoAdapter,
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
+    {
         self.run_to_end_impl(adapter, default_tick_interval, Some(class_filter), on_tick)
     }
 
@@ -389,14 +476,24 @@ impl<'a> DemoParser<'a> {
             .map(|position| position.offset())
             .or(stream_start);
         if let Some(start) = start {
-            self.replay(adapter, &mut state, start, Some(target_tick), None, |_| {
-                Ok(())
-            })?;
+            self.replay(
+                adapter,
+                &mut state,
+                start,
+                Some(target_tick),
+                None,
+                |_, _| Ok(()),
+            )?;
         }
         Ok(state)
     }
 
-    /// Cold-start one independently decodable segment from signon or a full packet.
+    /// Cold-start one segment from signon or a full-packet keyframe.
+    ///
+    /// A full-packet restart is exact only for entity classes that the game
+    /// fully re-keyframes in that snapshot. Consumers are responsible for
+    /// choosing a compatible `class_filter`; pbdems2 cannot infer which
+    /// classes carry unsnapshotted state between keyframes.
     pub fn decode_segment<A, F>(
         &self,
         adapter: &mut A,
@@ -438,6 +535,59 @@ impl<'a> DemoParser<'a> {
         A: DemoAdapter,
         F: FnMut(&ParserState) -> std::result::Result<(), A::Error>,
     {
+        let mut on_tick = on_tick;
+        self.try_decode_segment_with_adapter(
+            adapter,
+            default_tick_interval,
+            start,
+            end_tick,
+            class_filter,
+            |state, _| on_tick(state),
+        )
+    }
+
+    /// Decode one segment and expose mutable adapter state at each tick.
+    pub fn decode_segment_with_adapter<A, F>(
+        &self,
+        adapter: &mut A,
+        default_tick_interval: f32,
+        start: Option<usize>,
+        end_tick: i32,
+        class_filter: &HashSet<&str>,
+        on_tick: F,
+    ) -> std::result::Result<ParserState, A::Error>
+    where
+        A: DemoAdapter,
+        F: FnMut(&ParserState, &mut A),
+    {
+        let mut on_tick = on_tick;
+        self.try_decode_segment_with_adapter(
+            adapter,
+            default_tick_interval,
+            start,
+            end_tick,
+            class_filter,
+            |state, adapter| {
+                on_tick(state, adapter);
+                Ok(())
+            },
+        )
+    }
+
+    /// Fallible segment playback with mutable adapter access at each tick.
+    pub fn try_decode_segment_with_adapter<A, F>(
+        &self,
+        adapter: &mut A,
+        default_tick_interval: f32,
+        start: Option<usize>,
+        end_tick: i32,
+        class_filter: &HashSet<&str>,
+        on_tick: F,
+    ) -> std::result::Result<ParserState, A::Error>
+    where
+        A: DemoAdapter,
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
+    {
         let (mut state, stream_start) = self.initialize(adapter, default_tick_interval)?;
         if let Some(start) = start.or(stream_start) {
             self.replay(
@@ -461,7 +611,7 @@ impl<'a> DemoParser<'a> {
     ) -> std::result::Result<ParserState, A::Error>
     where
         A: DemoAdapter,
-        F: FnMut(&ParserState) -> std::result::Result<(), A::Error>,
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
     {
         let (mut state, stream_start) = self.initialize(adapter, default_tick_interval)?;
         if let Some(start) = stream_start {
@@ -521,7 +671,7 @@ impl<'a> DemoParser<'a> {
     ) -> std::result::Result<(), A::Error>
     where
         A: DemoAdapter,
-        F: FnMut(&ParserState) -> std::result::Result<(), A::Error>,
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
     {
         let limits = self.demo.limits();
         let commands = self.demo.commands_from(start).map_err(A::Error::from)?;
@@ -539,7 +689,7 @@ impl<'a> DemoParser<'a> {
             }
 
             if last_tick.is_some_and(|last| last != header.tick) {
-                on_tick(state)?;
+                on_tick(state, adapter)?;
                 state.clear_tick_changes();
             }
             last_tick = Some(header.tick);
@@ -547,7 +697,7 @@ impl<'a> DemoParser<'a> {
 
             if header.cmd == command::STOP {
                 if header.tick >= 0 {
-                    on_tick(state)?;
+                    on_tick(state, adapter)?;
                     emitted_final_tick = true;
                 }
                 break;
@@ -565,7 +715,7 @@ impl<'a> DemoParser<'a> {
         }
 
         if !emitted_final_tick && last_tick.is_some_and(|tick| tick >= 0) {
-            on_tick(state)?;
+            on_tick(state, adapter)?;
         }
         Ok(())
     }

@@ -52,4 +52,7 @@ pub use limits::DecodeLimits;
 #[cfg_attr(docsrs, doc(cfg(feature = "mmap")))]
 pub use mmap::MappedDemo;
 pub use packet::{PacketMessageFrame, PacketMessageIter};
-pub use playback::{CommandContext, DemoAdapter, DemoParser, ParserState};
+pub use playback::{
+    CheckpointAdapter, CommandContext, DemoAdapter, DemoParser, ParserState, PlaybackSession,
+    PreparedPlayback,
+};
