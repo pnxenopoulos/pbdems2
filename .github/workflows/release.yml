@@ -69,13 +69,18 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TAG_NAME: v${{ steps.version.outputs.version }}
         run: |
-          tagged_sha=$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG_NAME" --jq .object.sha 2>/dev/null || true)
-          if [ -z "$tagged_sha" ]; then
+          if response=$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG_NAME" --jq .object.sha 2>&1); then
+            if [ "$response" = "$COMMIT_SHA" ]; then
+              echo "$TAG_NAME already points at $COMMIT_SHA; the tag step will be a no-op."
+            else
+              echo "$TAG_NAME already exists on $response; bump the version in Cargo.toml before releasing."
+              exit 1
+            fi
+          elif printf '%s\n' "$response" | grep -q 'HTTP 404'; then
             echo "$TAG_NAME is available."
-          elif [ "$tagged_sha" = "$COMMIT_SHA" ]; then
-            echo "$TAG_NAME already points at $COMMIT_SHA; the tag step will be a no-op."
           else
-            echo "$TAG_NAME already exists on $tagged_sha; bump the version in Cargo.toml before releasing."
+            printf '%s\n' "$response" >&2
+            echo "Could not determine whether $TAG_NAME already exists."
             exit 1
           fi
 
