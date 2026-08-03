@@ -88,7 +88,7 @@ jobs:
     name: Publish pbdems2
     needs: [ci-gate, build-cli]
     runs-on: ubuntu-latest
-    environment: crates
+    environment: release
     permissions:
       contents: read
       id-token: write
