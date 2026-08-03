@@ -2,26 +2,19 @@
 
 ## Supported versions
 
-Security fixes are provided for the latest released minor version of pbdems2.
-Until the first crates.io release, the `main` branch is the supported version.
+The latest released minor version receives security fixes. Before the first
+crates.io release, `main` is the supported version (i.e., `main` is in development).
 
 ## Reporting a vulnerability
 
-Please use GitHub's private vulnerability reporting for the pbdems2 repository.
-Do not open a public issue for a parser crash, denial-of-service vector, memory
-exhaustion issue, or other vulnerability until a fix is available. Include the
-smallest reproducing input you can share, the affected version or commit, and
-the platform/toolchain used.
+Include a small reproducer, the affected version or commit, and your platform
+and toolchain.
 
-## Untrusted demo data
+## Untrusted demos
 
-Demo files are untrusted input. Applications should retain the default
-`DecodeLimits` or choose explicit limits appropriate for their environment.
-Raising limits may increase the CPU and memory available to a malicious input.
-The fuzz targets in `fuzz/` exercise the primary decode boundaries with reduced
-limits and AddressSanitizer.
+Treat demos as untrusted input. Keep the default `DecodeLimits` or choose limits
+that fit your environment. Higher limits give malicious files more CPU and
+memory to work with.
 
-File-backed memory maps require the underlying file to remain unchanged and
-untruncated for the mapping's lifetime. `MappedDemo::open` is therefore unsafe
-and delegates that invariant to its caller; applications should map immutable
-or otherwise protected demo files.
+Memory-mapped files must stay unchanged and untruncated while mapped. That is
+why `MappedDemo::open` is unsafe. Only map files you can keep stable.

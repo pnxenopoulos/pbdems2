@@ -1,9 +1,6 @@
 # Rust
 /target/
 **/target/
-fuzz/artifacts/
-fuzz/corpus/
-fuzz/coverage/
 Cargo.lock.orig
 *.rs.bk
 *.pdb
