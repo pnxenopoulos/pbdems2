@@ -641,11 +641,6 @@ impl SerializerContainer {
                 serializer.fields.push(field);
             }
 
-            if serializer_map.contains_key(&serializer.name) {
-                return Err(Error::Parse {
-                    context: format!("duplicate serializer name '{}'", serializer.name),
-                });
-            }
             serializer_map.insert(serializer.name.clone(), Arc::new(serializer));
         }
 
@@ -877,5 +872,36 @@ mod tests {
         assert!(key.is_some());
         let name = ser.field_name_for_key(key.unwrap()).unwrap();
         assert_eq!(name, "m_pGameRules.m_bPaused");
+    }
+
+    #[test]
+    fn duplicate_serializer_names_keep_the_last_definition() {
+        let serializers = SerializerContainer::parse(
+            FlattenedSerializer::new(
+                vec![
+                    FlattenedSerializerDefinition::new(Some(0), vec![0]),
+                    FlattenedSerializerDefinition::new(Some(0), vec![1]),
+                ],
+                vec![
+                    "CTest".into(),
+                    "uint32".into(),
+                    "m_first".into(),
+                    "m_second".into(),
+                ],
+                vec![
+                    FlattenedField::new(Some(1), Some(2)),
+                    FlattenedField::new(Some(1), Some(3)),
+                ],
+            ),
+            DecodeProfile::new(
+                super::super::field_decoder::BareCharEncoding::UnsignedVarint,
+                super::super::field_decoder::PreciseQAngleMode::Raw,
+            ),
+        )
+        .expect("valid duplicate serializer definitions");
+
+        let serializer = serializers.get("CTest").expect("serializer exists");
+        assert_eq!(serializer.fields.len(), 1);
+        assert_eq!(serializer.fields[0].var_name, "m_second");
     }
 }

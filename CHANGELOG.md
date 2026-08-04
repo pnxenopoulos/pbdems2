@@ -2,6 +2,12 @@
 
 Notable pbdems2 changes live here.
 
+## v0.2.1
+
+- Restored Source 2's last-definition-wins behavior for duplicate flattened
+  serializer names. Valid Counter-Strike 2 and Deadlock demos contain these
+  duplicates, so rejecting them prevented both games from decoding signon.
+
 ## v0.2.0
 
 - Added non-borrowing `PreparedPlayback` seeds that decode signon and build the
