@@ -94,6 +94,26 @@ impl<'a> PacketMessageFrame<'a> {
             source: Box::new(source),
         })
     }
+
+    /// Borrow an aligned payload or reconstruct an unaligned one in `scratch`.
+    ///
+    /// This is the convenient counterpart to [`Self::payload`] and
+    /// [`Self::copy_payload`] for adapters that only need a contiguous byte
+    /// slice. The scratch buffer is reused and is left untouched when the
+    /// payload can be borrowed directly.
+    pub fn payload_or_copy<'scratch>(
+        &'scratch self,
+        scratch: &'scratch mut Vec<u8>,
+    ) -> Result<&'scratch [u8]>
+    where
+        'a: 'scratch,
+    {
+        if let Some(payload) = self.payload() {
+            return Ok(payload);
+        }
+        self.copy_payload(scratch)?;
+        Ok(scratch)
+    }
 }
 
 /// Strict, allocation-free iterator over messages inside a packet payload.
@@ -275,12 +295,24 @@ mod tests {
         assert_eq!(frames[0].payload(), None);
 
         let mut payload = Vec::new();
-        frames[0].copy_payload(&mut payload).expect("copy payload");
+        assert_eq!(
+            frames[0]
+                .payload_or_copy(&mut payload)
+                .expect("copy unaligned payload"),
+            b"abc"
+        );
         assert_eq!(payload, b"abc");
+
         assert_eq!(frames[1].message_type(), 72);
         assert_eq!(frames[1].payload(), Some(&b"de"[..]));
-        frames[1].copy_payload(&mut payload).expect("reuse buffer");
-        assert_eq!(payload, b"de");
+        assert_eq!(
+            frames[1]
+                .payload_or_copy(&mut payload)
+                .expect("borrow aligned payload"),
+            b"de"
+        );
+        // Borrowing the aligned payload does not overwrite reusable scratch.
+        assert_eq!(payload, b"abc");
     }
 
     #[test]

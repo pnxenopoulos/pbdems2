@@ -6,7 +6,7 @@ use crate::demo::DemoIndex;
 use crate::error::Error;
 use crate::limits::DecodeLimits;
 
-use super::{DemoAdapter, DemoParser, ParserState};
+use super::{DemoAdapter, DemoParser, ParserState, segment_replay_end_tick};
 
 /// A game adapter that can save semantic signon state and restore a fresh run.
 ///
@@ -29,6 +29,31 @@ struct DemoIdentity {
     address: usize,
     length: usize,
     limits: DecodeLimits,
+}
+
+/// One independently decodable range bounded by full-packet keyframes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PlaybackSegment {
+    start_offset: Option<usize>,
+    end_tick: i32,
+}
+
+impl PlaybackSegment {
+    /// Absolute byte offset of the starting full packet.
+    ///
+    /// The first segment returns `None` and starts from the post-signon
+    /// baseline instead.
+    pub const fn start_offset(&self) -> Option<usize> {
+        self.start_offset
+    }
+
+    /// Exclusive tick boundary passed to segmented playback.
+    ///
+    /// The final segment uses `i32::MAX` so it runs through the end of the demo.
+    pub const fn end_tick(&self) -> i32 {
+        self.end_tick
+    }
 }
 
 impl DemoIdentity {
@@ -72,6 +97,30 @@ impl<A: CheckpointAdapter> PreparedPlayback<A> {
     /// Header-only index built during preparation.
     pub const fn index(&self) -> &DemoIndex {
         &self.index
+    }
+
+    /// Split playback into at most `max_segments` full-packet-bounded ranges.
+    ///
+    /// Segment zero starts from the post-signon baseline. Every later segment
+    /// starts at an evenly spaced full packet, and each non-final segment ends
+    /// immediately before the next segment's keyframe tick. A zero budget is
+    /// treated as one. The result is never empty, even when the demo has no
+    /// full packets.
+    pub fn segment_plan(&self, max_segments: usize) -> Vec<PlaybackSegment> {
+        let full_packets = self.index.full_packets();
+        let interval_count = full_packets.len().saturating_add(1);
+        let count = max_segments.max(1).min(interval_count);
+        let boundary_index = |segment: usize| segment * interval_count / count - 1;
+        (0..count)
+            .map(|i| PlaybackSegment {
+                start_offset: (i != 0).then(|| full_packets[boundary_index(i)].offset()),
+                end_tick: if i == count - 1 {
+                    i32::MAX
+                } else {
+                    full_packets[boundary_index(i + 1)].tick()
+                },
+            })
+            .collect()
     }
 
     /// Create an isolated one-run session over the original demo allocation.
@@ -340,7 +389,7 @@ impl<'demo, A: CheckpointAdapter> PlaybackSession<'demo, '_, A> {
                 &mut self.adapter,
                 &mut self.state,
                 start,
-                Some(end_tick.saturating_sub(1)),
+                segment_replay_end_tick(end_tick),
                 Some(class_filter),
                 on_tick,
             )?;
@@ -470,6 +519,25 @@ mod tests {
         bytes
     }
 
+    fn segmented_fixture() -> Vec<u8> {
+        let mut bytes = Vec::from(MAGIC);
+        bytes.resize(HEADER_SIZE, 0);
+        push_command(&mut bytes, command::SEND_TABLES, 0);
+        push_command(&mut bytes, command::CLASS_INFO, 0);
+        push_command(&mut bytes, command::SIGNON_PACKET, 0);
+        push_command(&mut bytes, command::SYNC_TICK, 0);
+        for tick in 1..=9 {
+            let cmd = if tick % 2 == 0 {
+                command::FULL_PACKET
+            } else {
+                command::PACKET
+            };
+            push_command(&mut bytes, cmd, tick);
+        }
+        push_command(&mut bytes, command::STOP, 10);
+        bytes
+    }
+
     fn assert_send_sync<T: Send + Sync>() {}
 
     #[test]
@@ -490,6 +558,69 @@ mod tests {
         let session = prepared.session(parser).expect("matching demo");
         assert_eq!(session.adapter().signon_marker, 7);
         assert!(session.adapter().scratch.is_empty());
+    }
+
+    #[test]
+    fn segment_plan_is_bounded_balanced_and_never_empty() {
+        let bytes = segmented_fixture();
+        let parser = DemoParser::new(&bytes).expect("valid demo");
+        let prepared = parser
+            .prepare(StatefulAdapter::default(), 1.0 / 30.0)
+            .expect("valid preparation");
+        let full_packets = prepared.index().full_packets();
+        assert_eq!(
+            full_packets
+                .iter()
+                .map(|position| position.tick())
+                .collect::<Vec<_>>(),
+            [2, 4, 6, 8]
+        );
+
+        let plan = prepared.segment_plan(3);
+        assert_eq!(
+            plan.iter()
+                .map(|segment| (segment.start_offset(), segment.end_tick()))
+                .collect::<Vec<_>>(),
+            [
+                (None, 2),
+                (Some(full_packets[0].offset()), 6),
+                (Some(full_packets[2].offset()), i32::MAX),
+            ]
+        );
+
+        let maximum = prepared.segment_plan(usize::MAX);
+        assert_eq!(maximum.len(), full_packets.len() + 1);
+        assert_eq!(maximum[0].start_offset(), None);
+        assert_eq!(maximum[0].end_tick(), 2);
+        assert_eq!(
+            maximum.last().map(PlaybackSegment::start_offset),
+            Some(Some(full_packets[3].offset()))
+        );
+        assert_eq!(
+            maximum.last().map(PlaybackSegment::end_tick),
+            Some(i32::MAX)
+        );
+
+        let minimum = prepared.segment_plan(0);
+        assert_eq!(minimum.len(), 1);
+        assert_eq!(minimum[0].start_offset(), None);
+        assert_eq!(minimum[0].end_tick(), i32::MAX);
+
+        let filter = HashSet::from(["CTest"]);
+        let mut ticks = Vec::new();
+        for segment in plan {
+            prepared
+                .session(parser)
+                .expect("matching demo")
+                .decode_segment(
+                    segment.start_offset(),
+                    segment.end_tick(),
+                    &filter,
+                    |state| ticks.push(state.tick()),
+                )
+                .expect("planned segment playback");
+        }
+        assert_eq!(ticks, (1..=10).collect::<Vec<_>>());
     }
 
     #[test]

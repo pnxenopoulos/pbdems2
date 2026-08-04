@@ -31,6 +31,14 @@ Deadlock and [Awpy](https://github.com/pnxenopoulos/awpy) for CS2.
 Game crates handle generated protobufs, events, domain models, constants, and
 language bindings. Basically, if it's specific to a game, you won't find it in pbdems2!
 
+## Format guide
+
+The [PBDEMS2 format guide](https://docs.rs/pbdems2/latest/pbdems2/guide/index.html)
+documents the shared file header and command stream, packet-message framing,
+serializers and field paths, string tables and baselines, entities and handles,
+and the adapter/playback lifecycle. Game-specific parsers can link to these
+pages and keep only their protobuf and domain documentation locally.
+
 ## Game adapters
 
 Each game supplies a neutral decode profile for its wire quirks:
@@ -72,7 +80,8 @@ infallible callbacks.
 
 `CommandContext::packet_messages` reads the common packet framing while the
 adapter decides what each message ID means. Aligned payloads are borrowed.
-Unaligned payloads can be copied into one reusable buffer.
+`PacketMessageFrame::payload_or_copy` returns that borrowed slice when possible
+and otherwise reconstructs the payload in one caller-owned reusable buffer.
 
 `Demo::header` exposes validated file-info and spawn-groups offsets.
 `parse_to_tick` starts at the nearest full packet and replays the needed deltas.
@@ -105,8 +114,11 @@ single entity-and-event pass without putting generated messages or event types
 in pbdems2.
 
 Prepared values can be shared across threads when their checkpoint state is
-`Send + Sync`. Full-packet segment restarts are exact only for classes that the
-game fully re-keyframes in those snapshots.
+`Send + Sync`. `PreparedPlayback::segment_plan` produces a bounded,
+never-empty set of ranges across the post-signon baseline, full-packet
+keyframes, and the demo tail; each range can be decoded in an independent
+session. Full-packet segment restarts are exact only for classes that the game
+fully re-keyframes in those snapshots.
 
 ## Limits and large files
 

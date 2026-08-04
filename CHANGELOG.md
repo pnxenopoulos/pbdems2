@@ -2,6 +2,20 @@
 
 Notable pbdems2 changes live here.
 
+## v0.2.2
+
+- Added a multi-page PBDEMS2 format and parser architecture guide to the
+  docs.rs API documentation, covering command and packet framing, serializers,
+  string tables, entity lifecycles and handles, adapters, seeking, and prepared
+  playback.
+- Added `PreparedPlayback::segment_plan`, which partitions a demo into a
+  bounded, never-empty set of independently decodable ranges at full-packet
+  keyframes. Planning accounts for the post-signon baseline and tail intervals
+  and centralizes boundary arithmetic for parallel consumers.
+- Added `PacketMessageFrame::payload_or_copy`, which borrows aligned protobuf
+  payloads and otherwise reconstructs them in a caller-owned reusable scratch
+  buffer.
+
 ## v0.2.1
 
 - Restored Source 2's last-definition-wins behavior for duplicate flattened

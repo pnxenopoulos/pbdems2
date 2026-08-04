@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 mod prepared;
 
-pub use prepared::{CheckpointAdapter, PlaybackSession, PreparedPlayback};
+pub use prepared::{CheckpointAdapter, PlaybackSegment, PlaybackSession, PreparedPlayback};
 
 use crate::demo::{CommandFrame, Demo, DemoIndex, command};
 use crate::entity::field_path::FieldPath;
@@ -98,6 +98,14 @@ impl ParserState {
     fn clear_tick_changes(&mut self) {
         self.string_tables.clear_dirty();
         self.entities.clear_updated();
+    }
+}
+
+const fn segment_replay_end_tick(exclusive_end_tick: i32) -> Option<i32> {
+    if exclusive_end_tick == i32::MAX {
+        None
+    } else {
+        Some(exclusive_end_tick.saturating_sub(1))
     }
 }
 
@@ -594,7 +602,7 @@ impl<'a> DemoParser<'a> {
                 adapter,
                 &mut state,
                 start,
-                Some(end_tick.saturating_sub(1)),
+                segment_replay_end_tick(end_tick),
                 Some(class_filter),
                 on_tick,
             )?;
