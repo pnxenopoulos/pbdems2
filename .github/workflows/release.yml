@@ -236,15 +236,19 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           TAG_NAME: v${{ needs.ci-gate.outputs.version }}
         run: |
-          tagged_sha=$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG_NAME" --jq .object.sha 2>/dev/null || true)
-          if [ "$tagged_sha" = "$COMMIT_SHA" ]; then
-            echo "$TAG_NAME already points at $COMMIT_SHA; nothing to do."
-            exit 0
-          fi
-          if [ -n "$tagged_sha" ]; then
-            echo "$TAG_NAME already exists on $tagged_sha; refusing to move it."
+          if response=$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG_NAME" --jq .object.sha 2>&1); then
+            if [ "$response" = "$COMMIT_SHA" ]; then
+              echo "$TAG_NAME already points at $COMMIT_SHA; nothing to do."
+              exit 0
+            fi
+            echo "$TAG_NAME already exists on $response; refusing to move it."
+            exit 1
+          elif ! printf '%s\n' "$response" | grep -q 'HTTP 404'; then
+            printf '%s\n' "$response" >&2
+            echo "Could not determine whether $TAG_NAME already exists."
             exit 1
           fi
+
           gh api "repos/$REPOSITORY/git/refs" \
             -f ref="refs/tags/$TAG_NAME" \
             -f sha="$COMMIT_SHA" > /dev/null
