@@ -49,9 +49,13 @@ fn packet_writer(index: u32, command: u8) -> BitWriter {
 }
 
 fn create_packet(index: u32, value: bool) -> Vec<u8> {
+    create_packet_with_serial(index, 7, value)
+}
+
+fn create_packet_with_serial(index: u32, serial: u32, value: bool) -> Vec<u8> {
     let mut writer = packet_writer(index, CMD_CREATE_DELETE);
     writer.push_bits(0, 1);
-    writer.push_bits(7, NUM_SERIAL_NUM_BITS as usize);
+    writer.push_bits(u64::from(serial), NUM_SERIAL_NUM_BITS as usize);
     writer.push_uvarint32(0);
     emit_single_bool_update(&mut writer, value);
     writer.finish()
@@ -78,6 +82,60 @@ fn apply_packet(
         &mut FieldDecodeContext::new(1.0 / 64.0),
         &mut Vec::new(),
     )
+}
+
+fn apply_packet_filtered(
+    entities: &mut EntityContainer,
+    data: &[u8],
+    class_info: &ClassInfo,
+    serializer_container: &SerializerContainer,
+    string_tables: &StringTableContainer,
+    class_filter: &HashSet<&str>,
+) -> Result<()> {
+    entities.handle_packet_entities_filtered(
+        PacketEntities::new(1, data, 0),
+        class_info,
+        serializer_container,
+        string_tables,
+        &mut FieldDecodeContext::new(1.0 / 64.0),
+        class_filter,
+        &mut Vec::new(),
+    )
+}
+
+#[test]
+fn entity_ids_combine_slot_and_serial_without_changing_storage() {
+    let entity = Entity::from_fields(5, 7, 0, "CTest", true, FxHashMap::default()).unwrap();
+    assert_eq!(entity.id(), EntityId::new(5, 7));
+
+    let mut entities = EntityContainer::new();
+    entities.insert(entity).unwrap();
+    assert_eq!(entities.entity_changes()[0].id(), EntityId::new(5, 7));
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn entity_ids_and_lifecycle_changes_serialize() {
+    let mut entities = EntityContainer::new();
+    entities
+        .insert(Entity::from_fields(5, 7, 0, "CTest", true, FxHashMap::default()).unwrap())
+        .unwrap();
+    let change = &entities.entity_changes()[0];
+
+    assert_eq!(
+        serde_json::to_value(change.id()).unwrap(),
+        serde_json::json!({ "index": 5, "serial": 7 })
+    );
+    assert_eq!(
+        serde_json::to_value(change).unwrap(),
+        serde_json::json!({
+            "kind": "Created",
+            "index": 5,
+            "serial": 7,
+            "class_id": 0,
+            "class_name": "CTest"
+        })
+    );
 }
 
 #[test]
@@ -213,8 +271,23 @@ fn validates_entity_and_container_indices_and_tracks_replacements() {
         "Second"
     );
     assert_eq!(container.updated_indices(), &[2, 2]);
+    assert_eq!(
+        container
+            .entity_changes()
+            .iter()
+            .map(|change| change.kind)
+            .collect::<Vec<_>>(),
+        [
+            EntityChangeKind::Created,
+            EntityChangeKind::Deleted,
+            EntityChangeKind::Created,
+        ]
+    );
     container.clear_updated();
     assert!(container.updated_indices().is_empty());
+    assert_eq!(container.entity_changes().len(), 3);
+    container.clear_entity_changes();
+    assert!(container.entity_changes().is_empty());
     assert!(container.get(-1).is_none());
 }
 
@@ -236,7 +309,21 @@ fn packet_lifecycle_creates_leaves_reactivates_and_deletes() {
     assert!(entities.get(5).unwrap().active);
     assert!(entities.get(5).unwrap().get_bool(Some(field_key(0))));
     assert_eq!(entities.updated_indices(), &[5]);
-    entities.clear_updated();
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Created);
+    assert_eq!(entities.entity_changes()[0].serial, 7);
+    entities.clear_tick_changes();
+
+    apply_packet(
+        &mut entities,
+        &update_packet(5, false),
+        &class_info,
+        &serializer_container,
+        &tables,
+    )
+    .unwrap();
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Updated);
+    assert_eq!(entities.updated_indices(), &[5]);
+    entities.clear_tick_changes();
 
     let leave = packet_writer(5, CMD_LEAVE).finish();
     apply_packet(
@@ -248,19 +335,27 @@ fn packet_lifecycle_creates_leaves_reactivates_and_deletes() {
     )
     .unwrap();
     assert!(!entities.get(5).unwrap().active);
+    assert_eq!(entities.len(), 1, "plain leave keeps the entity");
     assert!(entities.updated_indices().is_empty());
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::LeftPvs);
+    entities.clear_tick_changes();
 
     apply_packet(
         &mut entities,
-        &update_packet(5, false),
+        &update_packet(5, true),
         &class_info,
         &serializer_container,
         &tables,
     )
     .unwrap();
     assert!(entities.get(5).unwrap().active);
-    assert!(!entities.get(5).unwrap().get_bool(Some(field_key(0))));
+    assert!(entities.get(5).unwrap().get_bool(Some(field_key(0))));
     assert_eq!(entities.updated_indices(), &[5]);
+    assert_eq!(
+        entities.entity_changes()[0].kind,
+        EntityChangeKind::Reactivated
+    );
+    entities.clear_tick_changes();
 
     let delete = packet_writer(5, CMD_LEAVE | CMD_CREATE_DELETE).finish();
     apply_packet(
@@ -272,6 +367,48 @@ fn packet_lifecycle_creates_leaves_reactivates_and_deletes() {
     )
     .unwrap();
     assert!(entities.get(5).is_none());
+    let deleted = &entities.entity_changes()[0];
+    assert_eq!(deleted.kind, EntityChangeKind::Deleted);
+    assert_eq!((deleted.index, deleted.serial, deleted.class_id), (5, 7, 0));
+    assert_eq!(&*deleted.class_name, "CTest");
+}
+
+#[test]
+fn slot_reuse_emits_old_delete_before_new_create() {
+    let class_info = classes();
+    let serializer_container = serializers();
+    let tables = StringTableContainer::new();
+    let mut entities = EntityContainer::new();
+
+    apply_packet(
+        &mut entities,
+        &create_packet_with_serial(5, 7, true),
+        &class_info,
+        &serializer_container,
+        &tables,
+    )
+    .unwrap();
+    entities.clear_tick_changes();
+    apply_packet(
+        &mut entities,
+        &create_packet_with_serial(5, 19, false),
+        &class_info,
+        &serializer_container,
+        &tables,
+    )
+    .unwrap();
+
+    let changes = entities.entity_changes();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(
+        (changes[0].kind, changes[0].index, changes[0].serial),
+        (EntityChangeKind::Deleted, 5, 7)
+    );
+    assert_eq!(
+        (changes[1].kind, changes[1].index, changes[1].serial),
+        (EntityChangeKind::Created, 5, 19)
+    );
+    assert_eq!(entities.updated_indices(), &[5]);
 }
 
 #[test]
@@ -323,50 +460,95 @@ fn filtered_packets_track_selected_classes_and_skip_other_updates() {
     let tables = StringTableContainer::new();
     let mut entities = EntityContainer::new();
     entities.insert(Entity::new(2, 99, "stale".into())).unwrap();
-    entities.clear_updated();
+    entities.clear_tick_changes();
     let empty_filter = HashSet::new();
 
-    entities
-        .handle_packet_entities_filtered(
-            PacketEntities::new(1, &create_packet(2, true), 0),
-            &class_info,
-            &serializer_container,
-            &tables,
-            &mut FieldDecodeContext::new(1.0 / 64.0),
-            &empty_filter,
-            &mut Vec::new(),
-        )
-        .unwrap();
+    apply_packet_filtered(
+        &mut entities,
+        &create_packet(2, true),
+        &class_info,
+        &serializer_container,
+        &tables,
+        &empty_filter,
+    )
+    .unwrap();
     assert!(entities.get(2).is_none());
     assert_eq!(entities.skipped_class(2), Some(0));
+    assert_eq!(entities.entity_changes().len(), 1);
+    assert_eq!(
+        entities.entity_changes()[0].kind,
+        EntityChangeKind::Deleted,
+        "removing the previously tracked occupant is still observable"
+    );
+    entities.clear_tick_changes();
 
-    entities
-        .handle_packet_entities_filtered(
-            PacketEntities::new(1, &update_packet(2, false), 0),
-            &class_info,
-            &serializer_container,
-            &tables,
-            &mut FieldDecodeContext::new(1.0 / 64.0),
-            &empty_filter,
-            &mut Vec::new(),
-        )
-        .unwrap();
+    apply_packet_filtered(
+        &mut entities,
+        &update_packet(2, false),
+        &class_info,
+        &serializer_container,
+        &tables,
+        &empty_filter,
+    )
+    .unwrap();
     assert!(entities.updated_indices().is_empty());
+    assert!(entities.entity_changes().is_empty());
 
     let selected = HashSet::from(["CTest"]);
-    entities
-        .handle_packet_entities_filtered(
-            PacketEntities::new(1, &create_packet(2, true), 0),
-            &class_info,
-            &serializer_container,
-            &tables,
-            &mut FieldDecodeContext::new(1.0 / 64.0),
-            &selected,
-            &mut Vec::new(),
-        )
-        .unwrap();
+    apply_packet_filtered(
+        &mut entities,
+        &create_packet(2, true),
+        &class_info,
+        &serializer_container,
+        &tables,
+        &selected,
+    )
+    .unwrap();
     assert!(entities.get(2).is_some());
     assert_eq!(entities.skipped_class(2), None);
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Created);
+    entities.clear_tick_changes();
+
+    let leave = packet_writer(2, CMD_LEAVE).finish();
+    apply_packet_filtered(
+        &mut entities,
+        &leave,
+        &class_info,
+        &serializer_container,
+        &tables,
+        &selected,
+    )
+    .unwrap();
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::LeftPvs);
+    entities.clear_tick_changes();
+
+    apply_packet_filtered(
+        &mut entities,
+        &update_packet(2, false),
+        &class_info,
+        &serializer_container,
+        &tables,
+        &selected,
+    )
+    .unwrap();
+    assert_eq!(
+        entities.entity_changes()[0].kind,
+        EntityChangeKind::Reactivated
+    );
+    entities.clear_tick_changes();
+
+    let delete = packet_writer(2, CMD_LEAVE | CMD_CREATE_DELETE).finish();
+    apply_packet_filtered(
+        &mut entities,
+        &delete,
+        &class_info,
+        &serializer_container,
+        &tables,
+        &selected,
+    )
+    .unwrap();
+    assert!(entities.get(2).is_none());
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Deleted);
 }
 
 #[test]
@@ -375,17 +557,20 @@ fn filtered_leave_and_delete_keep_then_clear_skipped_class_state() {
     entities.set_skipped(3, Some(0));
     entities.handle_leave_filtered(3, false);
     assert_eq!(entities.skipped_class(3), Some(0));
+    assert!(entities.entity_changes().is_empty());
     entities.handle_leave_filtered(3, true);
     assert_eq!(entities.skipped_class(3), None);
+    assert!(entities.entity_changes().is_empty());
 
     entities.put_entity(3, Entity::new(3, 0, "CTest".into()));
+    entities.clear_tick_changes();
     entities.handle_leave_filtered(3, false);
     assert!(!entities.get(3).unwrap().active);
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::LeftPvs);
+    entities.clear_tick_changes();
     entities.handle_leave_filtered(3, true);
-    assert!(
-        entities.get(3).is_some(),
-        "deleting an inactive entity is ignored"
-    );
+    assert!(entities.get(3).is_none());
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Deleted);
 }
 
 #[test]

@@ -2,6 +2,26 @@
 
 Notable pbdems2 changes live here.
 
+## v0.3.0
+
+- Added ordered per-tick entity lifecycle records for creation, updates,
+  reactivation, leaving the PVS, deletion, and slot replacement.
+- Added compact deletion tombstones with entity index, serial, class ID, and a
+  shared class name. Replacements report the old deletion before the new
+  creation.
+- Added `EntityId { index, serial }` with helpers on entities and lifecycle
+  records for reliable keys across slot reuse.
+- Preserved entity serial numbers from the wire instead of leaving them at
+  zero.
+- Aligned filtered and unfiltered lifecycle behavior. Skipped classes stay
+  silent, while tracked entities keep complete transition records.
+- Defined callback clearing, sign-on baseline, and full-packet keyframe
+  behavior without changing the existing `updated_indices` API.
+- Added optional Serde serialization for entity identities and lifecycle
+  records.
+- Added focused lifecycle, identity, filtering, ordering, callback, and Serde
+  tests, plus lifecycle-aware packet-entity benchmarks.
+
 ## v0.2.2
 
 - Added a multi-page PBDEMS2 format and parser architecture guide to the

@@ -129,6 +129,82 @@ fn resolve_field_path<'a>(
 const CMD_LEAVE: u8 = 0x01;
 const CMD_CREATE_DELETE: u8 = 0x02;
 
+/// Stable identity for one occupant of an entity slot.
+///
+/// An index can be reused, so consumers should use both fields when keying
+/// long-lived state across ticks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
+pub struct EntityId {
+    /// The entity slot.
+    pub index: i32,
+    /// The serial number that distinguishes reuse of the slot.
+    pub serial: u32,
+}
+
+impl EntityId {
+    /// Construct an entity identity from its wire components.
+    pub const fn new(index: i32, serial: u32) -> Self {
+        Self { index, serial }
+    }
+}
+
+/// The lifecycle transition produced by an entity command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
+pub enum EntityChangeKind {
+    /// A new entity was created.
+    Created,
+    /// An active entity received a field update.
+    Updated,
+    /// An entity outside the PVS became active again through an update.
+    Reactivated,
+    /// An entity left the potentially visible set but still exists.
+    LeftPvs,
+    /// An entity was permanently removed or replaced.
+    Deleted,
+}
+
+/// A compact record of one decoded entity lifecycle transition.
+///
+/// [EntityChange::class_name] shares the entity's allocation, so a change does not
+/// allocate a new string or clone the full entity.
+/// Deletions are compact tombstones rather than retained [Entity] values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
+pub struct EntityChange {
+    /// The transition that occurred.
+    pub kind: EntityChangeKind,
+    /// The entity slot.
+    pub index: i32,
+    /// The serial number that distinguishes reuse of the same slot.
+    pub serial: u32,
+    /// The server class identifier.
+    pub class_id: i32,
+    /// The server class name.
+    pub class_name: Arc<str>,
+}
+
+impl EntityChange {
+    fn from_entity(kind: EntityChangeKind, entity: &Entity) -> Self {
+        Self {
+            kind,
+            index: entity.index,
+            serial: entity.serial,
+            class_id: entity.class_id,
+            class_name: Arc::clone(&entity.class_name),
+        }
+    }
+
+    /// Composite identity for this lifecycle record.
+    pub const fn id(&self) -> EntityId {
+        EntityId::new(self.index, self.serial)
+    }
+}
+
 /// A single entity with its class, fields, and current state.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -156,6 +232,11 @@ pub struct Entity {
 }
 
 impl Entity {
+    /// Composite identity for this slot occupant.
+    pub const fn id(&self) -> EntityId {
+        EntityId::new(self.index, self.serial)
+    }
+
     /// Construct an entity with explicit decoded state.
     pub fn from_fields(
         index: i32,
@@ -449,6 +530,8 @@ pub struct EntityContainer {
     skipped_entity_classes: Vec<i32>,
     /// Entity indices created or updated since the last tick callback.
     updated: Vec<i32>,
+    /// Ordered lifecycle transitions decoded since the last tick callback.
+    changes: Vec<EntityChange>,
 }
 
 impl EntityContainer {
@@ -482,7 +565,15 @@ impl EntityContainer {
         if index >= self.entities.len() {
             self.entities.resize_with(index + 1, || None);
         }
+        let created = EntityChange::from_entity(EntityChangeKind::Created, &entity);
         let previous = self.entities[index].replace(entity);
+        if let Some(previous) = previous.as_ref() {
+            self.changes.push(EntityChange::from_entity(
+                EntityChangeKind::Deleted,
+                previous,
+            ));
+        }
+        self.changes.push(created);
         self.updated.push(index as i32);
         Ok(previous)
     }
@@ -515,17 +606,35 @@ impl EntityContainer {
         if i >= self.entities.len() {
             self.entities.resize_with(i + 1, || None);
         }
-        self.entities[i] = Some(entity);
+        let created = EntityChange::from_entity(EntityChangeKind::Created, &entity);
+        let previous = self.entities[i].replace(entity);
+        if let Some(previous) = previous.as_ref() {
+            self.changes.push(EntityChange::from_entity(
+                EntityChangeKind::Deleted,
+                previous,
+            ));
+        }
+        self.changes.push(created);
         self.updated.push(index);
     }
 
-    /// Empty an entity's slot.
+    /// Empty an entity's slot without recording why it was removed.
     #[inline]
-    fn take_entity(&mut self, index: i32) {
-        if let Ok(i) = usize::try_from(index)
-            && let Some(slot) = self.entities.get_mut(i)
-        {
-            *slot = None;
+    fn take_entity(&mut self, index: i32) -> Option<Entity> {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| self.entities.get_mut(i))
+            .and_then(Option::take)
+    }
+
+    /// Permanently remove an entity and retain its old identity in the log.
+    #[inline]
+    fn delete_entity(&mut self, index: i32) {
+        if let Some(entity) = self.take_entity(index) {
+            self.changes.push(EntityChange::from_entity(
+                EntityChangeKind::Deleted,
+                &entity,
+            ));
         }
     }
 
@@ -643,20 +752,23 @@ impl EntityContainer {
     ///
     /// A plain leave (`delete == false`) marks the entity inactive but keeps it,
     /// so a subsequent update can re-activate it. A leave-and-delete removes it.
-    /// Leaves targeting an already-inactive entity are ignored, matching Source
-    /// 2's client behavior.
+    /// Repeated plain leaves are ignored. Deletion also removes an entity that
+    /// became dormant through an earlier leave.
     fn handle_leave(&mut self, index: i32, delete: bool) {
-        let active = match self.get(index) {
-            Some(e) => e.active,
-            None => return,
-        };
-        if !active {
+        if delete {
+            self.delete_entity(index);
             return;
         }
-        if delete {
-            self.take_entity(index);
-        } else if let Some(e) = self.entity_mut(index) {
+
+        let change = self.entity_mut(index).and_then(|e| {
+            if !e.active {
+                return None;
+            }
             e.active = false;
+            Some(EntityChange::from_entity(EntityChangeKind::LeftPvs, e))
+        });
+        if let Some(change) = change {
+            self.changes.push(change);
         }
     }
 
@@ -743,20 +855,10 @@ impl EntityContainer {
     /// from the skip set on delete so their class is still known for updates
     /// while they merely go dormant.
     fn handle_leave_filtered(&mut self, index: i32, delete: bool) {
-        match self.get(index).map(|e| e.active) {
-            Some(true) => {
-                if delete {
-                    self.take_entity(index);
-                } else if let Some(e) = self.entity_mut(index) {
-                    e.active = false;
-                }
-            }
-            Some(false) => {}
-            None => {
-                if delete {
-                    self.set_skipped(index, None);
-                }
-            }
+        if self.get(index).is_some() {
+            self.handle_leave(index, delete);
+        } else if delete {
+            self.set_skipped(index, None);
         }
     }
 
@@ -772,7 +874,7 @@ impl EntityContainer {
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
         let class_id = br.read_bits(class_info.bits())? as i32;
-        let _serial = br.read_bits(NUM_SERIAL_NUM_BITS as usize)?;
+        let serial = br.read_bits(NUM_SERIAL_NUM_BITS as usize)? as u32;
         let _unknown = br.read_uvarint32()?;
 
         let class_entry = class_info.by_id(class_id).ok_or_else(|| Error::Parse {
@@ -787,6 +889,7 @@ impl EntityContainer {
                 })?;
 
         let mut entity = Entity::new(index, class_id, Arc::clone(&class_entry.network_name));
+        entity.serial = serial;
         // Pre-size the field map to the class's field count: a create applies the
         // baseline plus the create delta, setting many fields at once, so starting
         // from an empty map otherwise rehashes repeatedly as it grows.
@@ -827,26 +930,33 @@ impl EntityContainer {
         field_decode_ctx: &mut FieldDecodeContext,
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
-        let entity = match self.entity_mut(index) {
-            Some(e) => e,
-            None => {
-                return Err(Error::Parse {
-                    context: format!("tried to update non-existent entity #{index}"),
-                });
-            }
+        let change = {
+            let entity = match self.entity_mut(index) {
+                Some(e) => e,
+                None => {
+                    return Err(Error::Parse {
+                        context: format!("tried to update non-existent entity #{index}"),
+                    });
+                }
+            };
+            let kind = if entity.active {
+                EntityChangeKind::Updated
+            } else {
+                EntityChangeKind::Reactivated
+            };
+            entity.active = true;
+
+            let serializer = serializers
+                .get(&entity.class_name)
+                .ok_or_else(|| Error::Parse {
+                    context: format!("no serializer for {}", entity.class_name),
+                })?;
+
+            entity.apply_update(br, serializer, field_decode_ctx, fp_buf)?;
+            EntityChange::from_entity(kind, entity)
         };
-
-        // An update re-activates an entity that had left the PVS.
-        entity.active = true;
-
-        let serializer = serializers
-            .get(&entity.class_name)
-            .ok_or_else(|| Error::Parse {
-                context: format!("no serializer for {}", entity.class_name),
-            })?;
-
-        entity.apply_update(br, serializer, field_decode_ctx, fp_buf)?;
         self.updated.push(index);
+        self.changes.push(change);
         Ok(())
     }
 
@@ -864,7 +974,7 @@ impl EntityContainer {
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<bool> {
         let class_id = br.read_bits(class_info.bits())? as i32;
-        let _serial = br.read_bits(NUM_SERIAL_NUM_BITS as usize)?;
+        let serial = br.read_bits(NUM_SERIAL_NUM_BITS as usize)? as u32;
         let _unknown = br.read_uvarint32()?;
 
         let class_entry = class_info.by_id(class_id).ok_or_else(|| Error::Parse {
@@ -886,15 +996,14 @@ impl EntityContainer {
         if !class_filter.contains(class_entry.network_name.as_ref()) {
             // Skip this entity - just advance the bit reader, but track its
             // class_id so later updates to it can be skipped correctly.
-            self.take_entity(index);
-            self.set_skipped(index, Some(class_id));
             Entity::skip_update(br, serializer, field_decode_ctx, fp_buf)?;
+            self.delete_entity(index);
+            self.set_skipped(index, Some(class_id));
             return Ok(false);
         }
-        self.set_skipped(index, None);
-
         // Full processing for filtered entities
         let mut entity = Entity::new(index, class_id, Arc::clone(&class_entry.network_name));
+        entity.serial = serial;
         // Pre-size the field map to the class's field count: a create applies the
         // baseline plus the create delta, setting many fields at once, so starting
         // from an empty map otherwise rehashes repeatedly as it grows.
@@ -906,6 +1015,7 @@ impl EntityContainer {
         }
 
         entity.apply_update(br, serializer, field_decode_ctx, fp_buf)?;
+        self.set_skipped(index, None);
         self.put_entity(index, entity);
 
         Ok(true)
@@ -922,18 +1032,28 @@ impl EntityContainer {
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<bool> {
         // Check if we're tracking this entity
-        if let Some(entity) = self.entity_mut(index) {
-            // An update re-activates an entity that had left the PVS.
-            entity.active = true;
+        if self.get(index).is_some() {
+            let change = {
+                let entity = self.entity_mut(index).expect("entity checked above");
+                let kind = if entity.active {
+                    EntityChangeKind::Updated
+                } else {
+                    EntityChangeKind::Reactivated
+                };
+                entity.active = true;
 
-            let serializer = serializers
-                .get(&entity.class_name)
-                .ok_or_else(|| Error::Parse {
-                    context: format!("no serializer for {}", entity.class_name),
-                })?;
+                let serializer =
+                    serializers
+                        .get(&entity.class_name)
+                        .ok_or_else(|| Error::Parse {
+                            context: format!("no serializer for {}", entity.class_name),
+                        })?;
 
-            entity.apply_update(br, serializer, field_decode_ctx, fp_buf)?;
+                entity.apply_update(br, serializer, field_decode_ctx, fp_buf)?;
+                EntityChange::from_entity(kind, entity)
+            };
             self.updated.push(index);
+            self.changes.push(change);
             return Ok(true);
         }
 
@@ -993,9 +1113,34 @@ impl EntityContainer {
         &self.updated
     }
 
-    /// Clear per-tick change tracking after a consumer callback.
+    /// Ordered lifecycle transitions decoded for the current tick.
+    ///
+    /// During playback these are visible inside the tick callback. They are
+    /// cleared after the callback succeeds and before commands for the next
+    /// tick are decoded. Initial sign-on changes are not exposed as playback
+    /// changes, and a full-packet keyframe reports only the commands it actually
+    /// decodes rather than synthesizing a snapshot of unchanged entities.
+    pub fn entity_changes(&self) -> &[EntityChange] {
+        &self.changes
+    }
+
+    /// Clear only the legacy created-or-updated index list.
+    ///
+    /// This keeps the existing [Self::updated_indices] behavior. Use
+    /// [Self::clear_tick_changes] when consuming both tracking APIs.
     pub fn clear_updated(&mut self) {
         self.updated.clear();
+    }
+
+    /// Clear only the entity lifecycle log.
+    pub fn clear_entity_changes(&mut self) {
+        self.changes.clear();
+    }
+
+    /// Clear all per-tick entity tracking after a consumer callback.
+    pub fn clear_tick_changes(&mut self) {
+        self.updated.clear();
+        self.changes.clear();
     }
 
     /// Number of slotted entities (active or dormant).

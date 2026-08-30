@@ -201,12 +201,13 @@ fn packet_entities_benchmarks(criterion: &mut Criterion) {
                     &mut paths,
                 )
                 .expect("creates decode");
-            black_box(container.len())
+            black_box((container.len(), container.entity_changes().len()))
         });
     });
 
     group.bench_function("decode_updates_512x16", |bencher| {
         let mut container = populated_container(ENTITY_COUNT, FIELD_COUNT);
+        container.clear_tick_changes();
         let mut context = FieldDecodeContext::new(1.0 / 64.0);
         let mut paths = Vec::new();
         bencher.iter(|| {
@@ -220,8 +221,8 @@ fn packet_entities_benchmarks(criterion: &mut Criterion) {
                     &mut paths,
                 )
                 .expect("updates decode");
-            container.clear_updated();
-            black_box(container.len())
+            black_box((container.len(), container.entity_changes().len()));
+            container.clear_tick_changes();
         });
     });
 

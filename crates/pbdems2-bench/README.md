@@ -8,7 +8,7 @@ It covers:
 - byte and bit readers
 - headers, commands, indexes, copies, and Snappy decoding
 - field values, serializers, type parsing, and field paths
-- entity and class lookup
+- entity and class lookup, packet decoding, and lifecycle tracking
 - string-table creates, updates, snapshots, and lookups
 - Source 2 coordinate conversion
 

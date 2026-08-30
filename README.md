@@ -78,6 +78,15 @@ let state = parser.try_run_to_end(&mut adapter, 1.0 / 64.0, |tick| {
 Use the `try_*` methods when a tick callback can fail. The regular methods take
 infallible callbacks.
 
+Inside a tick callback, <code>EntityContainer::entity_changes</code> exposes ordered
+create, update, reactivation, leave-PVS, and delete records. Each record keeps
+the entity index, serial, class ID, and shared class name. This makes slot reuse
+unambiguous without cloning full entities or allocating a class name per
+change. The log clears after a successful callback. Sign-on establishes the
+initial state without emitting changes, and full-packet keyframes report the
+commands they decode rather than a synthetic snapshot. The older
+<code>updated_indices</code> API keeps its existing behavior.
+
 `CommandContext::packet_messages` reads the common packet framing while the
 adapter decides what each message ID means. Aligned payloads are borrowed.
 `PacketMessageFrame::payload_or_copy` returns that borrowed slice when possible
@@ -128,7 +137,7 @@ allocation, command, and packet errors keep useful context.
 The optional `mmap` feature provides an owning read-only map:
 
 ```toml
-pbdems2 = { version = "0.2", features = ["mmap"] }
+pbdems2 = { version = "0.3", features = ["mmap"] }
 ```
 
 ```rust
@@ -143,14 +152,14 @@ The constructor is unsafe because the caller must keep the mapped file stable.
 
 ```toml
 [dependencies]
-pbdems2 = "0.2"
+pbdems2 = "0.3"
 ```
 
-Serde support is on by default. Turn it off if you do not serialize decoded
-values:
+Serde support is on by default and includes <code>EntityId</code> and lifecycle
+records. Turn it off if you do not serialize decoded values:
 
 ```toml
-pbdems2 = { version = "0.2", default-features = false }
+pbdems2 = { version = "0.3", default-features = false }
 ```
 
 Consumer crates can keep old module paths with re-exports:

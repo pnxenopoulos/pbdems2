@@ -18,8 +18,8 @@ mod string_tables;
 
 pub use class_info::{ClassEntry, ClassInfo};
 pub use entities::{
-    ENTITY_HANDLE_INDEX_MASK, Entity, EntityContainer, INVALID_ENTITY_HANDLE, PacketEntities,
-    protobuf_handle_index,
+    ENTITY_HANDLE_INDEX_MASK, Entity, EntityChange, EntityChangeKind, EntityContainer, EntityId,
+    INVALID_ENTITY_HANDLE, PacketEntities, protobuf_handle_index,
 };
 pub use field_decoder::{
     BareCharEncoding, DecodeProfile, Decoder, FieldDecodeContext, FieldMetadata,

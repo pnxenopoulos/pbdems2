@@ -97,7 +97,7 @@ impl ParserState {
 
     fn clear_tick_changes(&mut self) {
         self.string_tables.clear_dirty();
-        self.entities.clear_updated();
+        self.entities.clear_tick_changes();
     }
 }
 
@@ -664,6 +664,10 @@ impl<'a> DemoParser<'a> {
 
         state.require_initialized().map_err(A::Error::from)?;
         state.string_tables.update_instance_baselines();
+        // Sign-on establishes the baseline state rather than an emitted gameplay
+        // tick. Do not leak setup lifecycle records into the first callback.
+        // The legacy updated-index list is intentionally left untouched.
+        state.entities.clear_entity_changes();
         Ok((state, stream_start))
     }
 
@@ -734,6 +738,7 @@ mod tests {
     use super::*;
     use crate::demo::{HEADER_SIZE, MAGIC};
     use crate::entity::{BareCharEncoding, FlattenedSerializerDefinition, PreciseQAngleMode};
+    use crate::entity::{Entity, EntityChangeKind};
 
     #[derive(Default)]
     struct Adapter;
@@ -770,6 +775,41 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct LifecycleAdapter;
+
+    impl DemoAdapter for LifecycleAdapter {
+        type Error = Error;
+
+        fn handle_command(
+            &mut self,
+            frame: &CommandFrame<'_>,
+            body: &[u8],
+            context: &mut CommandContext<'_, '_>,
+        ) -> Result<()> {
+            Adapter.handle_command(frame, body, context)?;
+            let index = match frame.header().cmd {
+                command::CLASS_INFO => 99,
+                command::PACKET => frame.header().tick,
+                _ => return Ok(()),
+            };
+            let class_name = context
+                .state
+                .class_info
+                .by_id(0)
+                .map_or_else(Default::default, |entry| entry.network_name.clone());
+            context.state.entities.insert(Entity::from_fields(
+                index,
+                index as u32,
+                0,
+                class_name,
+                true,
+                Default::default(),
+            )?)?;
+            Ok(())
+        }
+    }
+
     fn push_command(bytes: &mut Vec<u8>, command: u8, tick: u8) {
         bytes.extend_from_slice(&[command, tick, 0]);
     }
@@ -796,6 +836,35 @@ mod tests {
             .expect("valid playback");
         assert!(state.is_initialized());
         assert_eq!(ticks, [1, 2, 3]);
+    }
+
+    #[test]
+    fn entity_changes_are_scoped_to_successive_tick_callbacks() {
+        let bytes = fixture();
+        let parser = DemoParser::new(&bytes).unwrap();
+        let mut observed = Vec::new();
+        parser
+            .run_to_end(&mut LifecycleAdapter, 1.0 / 64.0, |state| {
+                observed.push((
+                    state.tick(),
+                    state
+                        .entities
+                        .entity_changes()
+                        .iter()
+                        .map(|change| change.kind)
+                        .collect::<Vec<_>>(),
+                ));
+            })
+            .unwrap();
+
+        assert_eq!(
+            observed,
+            [
+                (1, vec![EntityChangeKind::Created]),
+                (2, vec![EntityChangeKind::Created]),
+                (3, vec![]),
+            ]
+        );
     }
 
     #[test]
