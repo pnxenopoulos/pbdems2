@@ -2,14 +2,13 @@
 
 Notable pbdems2 changes live here.
 
-## Unreleased
+## v0.3.1
 
 - Resolve serializer names with borrowed iterators and build dotted names in one
   string. Unrepresentable nested paths and invalid packed depths return `None`.
 - Reuse field-cache entries without repeated map lookups, and share dynamic-array
   serializer construction while preserving decoder metadata.
 - Centralize shared workspace dependencies and selected Rust lint conventions.
-
 - Return parse errors for field-path operations that exceed seven nesting levels,
   pop past the root, or increment a nonexistent parent, instead of panicking on
   malformed entity updates.
