@@ -931,13 +931,10 @@ impl EntityContainer {
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
         let change = {
-            let entity = match self.entity_mut(index) {
-                Some(e) => e,
-                None => {
-                    return Err(Error::Parse {
-                        context: format!("tried to update non-existent entity #{index}"),
-                    });
-                }
+            let Some(entity) = self.entity_mut(index) else {
+                return Err(Error::Parse {
+                    context: format!("tried to update non-existent entity #{index}"),
+                });
             };
             let kind = if entity.active {
                 EntityChangeKind::Updated

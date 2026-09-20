@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
+use std::fmt::Write as _;
+use std::str::Split;
 
 use rustc_hash::FxHashMap;
 // Arc (not Rc) so that SerializerContainer is Send + Sync and can be
@@ -207,6 +209,14 @@ impl SerializerField {
             .map(AsRef::as_ref)
     }
 
+    fn append_name(&self, name: &mut String) {
+        if let Some(node) = self.send_node.as_deref().filter(|node| !node.is_empty()) {
+            name.push_str(node);
+            name.push('.');
+        }
+        name.push_str(&self.var_name);
+    }
+
     /// Returns `true` if this field represents a variable-length array.
     pub fn is_dynamic_array(&self) -> bool {
         self.metadata.is_dynamic_array()
@@ -226,61 +236,46 @@ pub struct Serializer {
 impl Serializer {
     /// Resolve a dotted field name (e.g. "m_pGameRules.m_bGamePaused") to a packed u64 key.
     /// Walks the serializer hierarchy matching send_node + var_name against path components.
+    /// Returns `None` when the name cannot fit in the seven-level packed path.
     pub fn resolve_field_key(&self, path: &str) -> Option<u64> {
-        let parts: Vec<&str> = path.split('.').collect();
-        self.resolve_parts(&parts, 0)
+        self.resolve_parts(path.split('.'), 0)
     }
 
-    fn resolve_parts(&self, parts: &[&str], depth: usize) -> Option<u64> {
-        if depth >= parts.len() {
+    fn resolve_parts(&self, parts: Split<'_, char>, depth: usize) -> Option<u64> {
+        if depth >= 7 {
             return None;
         }
 
         for (field_idx, field) in self.fields.iter().enumerate() {
-            // Build the name parts this field contributes (send_node + var_name)
-            let mut field_parts: Vec<&str> = Vec::new();
-            if let Some(ref sn) = field.send_node
-                && !sn.is_empty()
+            let mut remaining = parts.clone();
+            let send_node = field.send_node.as_deref().filter(|node| !node.is_empty());
+            let name = (!field.var_name.is_empty()).then_some(field.var_name.as_str());
+            if !send_node
+                .into_iter()
+                .flat_map(|node| node.split('.'))
+                .chain(name)
+                .all(|part| remaining.next() == Some(part))
             {
-                for part in sn.split('.') {
-                    field_parts.push(part);
-                }
-            }
-            if !field.var_name.is_empty() {
-                field_parts.push(&field.var_name);
-            }
-
-            // Check if the remaining path starts with these field parts
-            let remaining = &parts[depth..];
-            if remaining.len() < field_parts.len() {
-                continue;
-            }
-            if field_parts != remaining[..field_parts.len()] {
                 continue;
             }
 
-            let consumed = depth + field_parts.len();
-
-            // If we've consumed all parts, this is the field
-            if consumed == parts.len() {
+            // If we've consumed all parts, this is the field.
+            let mut after_index = remaining.clone();
+            let Some(next_part) = after_index.next() else {
                 let mut fp = FieldPath::default();
                 fp.data[0] = field_idx as u8;
                 // last stays 0
                 return Some(fp.pack());
-            }
-
-            // More parts remain — we need to recurse into a sub-serializer
-            let next_part = parts[consumed];
+            };
 
             // Dynamic array: next part is a numeric index
             if field.is_dynamic_array() {
                 if let Ok(array_idx) = next_part.parse::<usize>()
                     && let Some(ref fs) = field.field_serializer
                 {
-                    let inner_field = &fs.fields[0];
-                    let after_idx = consumed + 1;
+                    let inner_field = fs.fields.first()?;
 
-                    if after_idx == parts.len() {
+                    if after_index.clone().next().is_none() {
                         // The array element itself is the value
                         let mut fp = FieldPath::default();
                         fp.data[0] = field_idx as u8;
@@ -291,16 +286,16 @@ impl Serializer {
 
                     // Recurse into the inner field's serializer
                     if let Some(ref inner_fs) = inner_field.field_serializer
-                        && let Some(key) = inner_fs.resolve_parts(parts, after_idx)
+                        && let Some(key) = inner_fs.resolve_parts(after_index, depth + 2)
                     {
                         let inner_fp = FieldPath::unpack(key);
                         let mut fp = FieldPath::default();
                         fp.data[0] = field_idx as u8;
                         fp.data[1] = array_idx as u8;
                         fp.last = 2 + inner_fp.last;
-                        for i in 0..=inner_fp.last {
-                            fp.data[2 + i] = inner_fp.data[i];
-                        }
+                        fp.data
+                            .get_mut(2..=fp.last)?
+                            .copy_from_slice(&inner_fp.data[..=inner_fp.last]);
                         return Some(fp.pack());
                     }
                 }
@@ -309,15 +304,15 @@ impl Serializer {
 
             // Non-dynamic: recurse into field_serializer
             if let Some(ref fs) = field.field_serializer
-                && let Some(key) = fs.resolve_parts(parts, consumed)
+                && let Some(key) = fs.resolve_parts(remaining, depth + 1)
             {
                 let inner_fp = FieldPath::unpack(key);
                 let mut fp = FieldPath::default();
                 fp.data[0] = field_idx as u8;
                 fp.last = 1 + inner_fp.last;
-                for i in 0..=inner_fp.last {
-                    fp.data[1 + i] = inner_fp.data[i];
-                }
+                fp.data
+                    .get_mut(1..=fp.last)?
+                    .copy_from_slice(&inner_fp.data[..=inner_fp.last]);
                 return Some(fp.pack());
             }
         }
@@ -329,43 +324,29 @@ impl Serializer {
     /// Walks the serializer hierarchy using the unpacked FieldPath.
     pub fn field_name_for_key(&self, key: u64) -> Option<String> {
         let fp = FieldPath::unpack(key);
-        let mut parts: Vec<String> = Vec::new();
-        let mut field = self.fields.get(fp.get(0))?;
+        let indices = fp.data.get(..=fp.last)?;
+        let mut name = String::new();
+        let mut field = self.fields.get(usize::from(indices[0]))?;
+        field.append_name(&mut name);
 
-        if let Some(ref sn) = field.send_node
-            && !sn.is_empty()
-        {
-            for part in sn.split('.') {
-                parts.push(part.to_string());
-            }
-        }
-        parts.push(field.var_name.clone());
-
-        for i in 1..=fp.last {
-            let idx = fp.get(i);
+        for &index in &indices[1..] {
             if field.is_dynamic_array() {
-                parts.push(idx.to_string());
-                if let Some(ref fs) = field.field_serializer {
-                    field = &fs.fields[0];
+                write!(name, ".{index}").expect("writing to a String is infallible");
+                if let Some(ref serializer) = field.field_serializer {
+                    field = serializer.fields.first()?;
                 } else {
                     break;
                 }
-            } else if let Some(ref fs) = field.field_serializer {
-                field = fs.fields.get(idx)?;
-                if let Some(ref sn) = field.send_node
-                    && !sn.is_empty()
-                {
-                    for part in sn.split('.') {
-                        parts.push(part.to_string());
-                    }
-                }
-                parts.push(field.var_name.clone());
+            } else if let Some(ref serializer) = field.field_serializer {
+                field = serializer.fields.get(usize::from(index))?;
+                name.push('.');
+                field.append_name(&mut name);
             } else {
                 break;
             }
         }
 
-        Some(parts.join("."))
+        Some(name)
     }
 }
 
@@ -473,10 +454,13 @@ impl SerializerContainer {
             };
 
             for &field_index in &serializer_proto.fields_index {
-                if let Some(cached) = field_cache.get(&field_index) {
-                    serializer.fields.push(cached.clone());
-                    continue;
-                }
+                let entry = match field_cache.entry(field_index) {
+                    Entry::Occupied(cached) => {
+                        serializer.fields.push(Arc::clone(cached.get()));
+                        continue;
+                    }
+                    Entry::Vacant(entry) => entry,
+                };
 
                 let field_index_usize = usize::try_from(field_index).map_err(|_| Error::Parse {
                     context: format!("negative serializer field index {field_index}"),
@@ -568,55 +552,32 @@ impl SerializerContainer {
                         }))
                     }
                     fm if fm.is_dynamic_array() => {
-                        // For dynamic arrays of serializers, build a single-element serializer
-                        if fm.is_dynamic_serializer_array() {
-                            let inner_ser = field_serializer_name
+                        let field_serializer = if fm.is_dynamic_serializer_array() {
+                            field_serializer_name
                                 .as_deref()
-                                .and_then(|n| serializer_map.get(n).cloned());
-                            let inner = Arc::new(SerializerField {
-                                var_type: String::new(),
-                                var_name: String::new(),
-                                bit_count: None,
-                                low_value: None,
-                                high_value: None,
-                                encode_flags: None,
-                                field_serializer_name: None,
-                                send_node: None,
-                                var_encoder: None,
-                                field_serializer: inner_ser,
-                                field_type: parse_type(""),
-                                metadata: FieldMetadata::default(),
-                            });
-                            Some(Arc::new(Serializer {
-                                name: String::new(),
-                                fields: vec![inner],
-                            }))
+                                .and_then(|name| serializer_map.get(name).cloned())
                         } else {
-                            // Dynamic array of primitives: single-element serializer with inner decoder
-                            let inner_metadata = fm.dynamic_array_inner_metadata();
-                            let inner = Arc::new(SerializerField {
-                                var_type: String::new(),
-                                var_name: String::new(),
-                                bit_count: None,
-                                low_value: None,
-                                high_value: None,
-                                encode_flags: None,
-                                field_serializer_name: None,
-                                send_node: None,
-                                var_encoder: None,
-                                field_serializer: None,
-                                field_type: parse_type(""),
-                                metadata: inner_metadata,
-                            });
-                            Some(Arc::new(Serializer {
-                                name: String::new(),
-                                fields: vec![inner],
-                            }))
-                        }
+                            None
+                        };
+                        let inner = Arc::new(SerializerField {
+                            var_type: String::new(),
+                            var_name: String::new(),
+                            bit_count: None,
+                            low_value: None,
+                            high_value: None,
+                            encode_flags: None,
+                            field_serializer_name: None,
+                            send_node: None,
+                            var_encoder: None,
+                            field_serializer,
+                            field_type: parse_type(""),
+                            metadata: fm.dynamic_array_inner_metadata(),
+                        });
+                        Some(Arc::new(Serializer {
+                            name: String::new(),
+                            fields: vec![inner],
+                        }))
                     }
-                    fm if fm.is_pointer() => field_serializer_name
-                        .as_deref()
-                        .and_then(|n| serializer_map.get(n).cloned()),
                     _ => field_serializer_name
                         .as_deref()
                         .and_then(|n| serializer_map.get(n).cloned()),
@@ -637,7 +598,7 @@ impl SerializerContainer {
                     metadata,
                 });
 
-                field_cache.insert(field_index, field.clone());
+                entry.insert(Arc::clone(&field));
                 serializer.fields.push(field);
             }
 
@@ -903,5 +864,125 @@ mod tests {
         let serializer = serializers.get("CTest").expect("serializer exists");
         assert_eq!(serializer.fields.len(), 1);
         assert_eq!(serializer.fields[0].var_name, "m_second");
+    }
+
+    #[test]
+    fn nested_names_preserve_prefixes_arrays_and_empty_components() {
+        use super::super::field_decoder::FieldSpecialDescriptor;
+
+        let leaf = Arc::new(Serializer {
+            name: "leaf".into(),
+            fields: vec![make_field("value", Some("stats.current"))],
+        });
+        let mut nested = make_field("child", Some("outer.node"));
+        Arc::make_mut(&mut nested).field_serializer = Some(Arc::clone(&leaf));
+        let mut array = make_field("items", Some("outer.node"));
+        let mut inner = make_field("", None);
+        Arc::make_mut(&mut inner).field_serializer = Some(leaf);
+        let array_field = Arc::make_mut(&mut array);
+        array_field.metadata.special = Some(FieldSpecialDescriptor::DynamicSerializerArray);
+        array_field.field_serializer = Some(Arc::new(Serializer {
+            name: String::new(),
+            fields: vec![inner],
+        }));
+        let serializer = Serializer {
+            name: "root".into(),
+            fields: vec![
+                nested,
+                array,
+                make_field("value", Some(".prefix.")),
+                make_field("empty", Some("")),
+            ],
+        };
+
+        for (name, expected) in [
+            ("outer.node.child", vec![0]),
+            ("outer.node.child.stats.current.value", vec![0, 0]),
+            ("outer.node.items", vec![1]),
+            ("outer.node.items.12", vec![1, 12]),
+            ("outer.node.items.12.stats.current.value", vec![1, 12, 0]),
+            (".prefix..value", vec![2]),
+            ("empty", vec![3]),
+        ] {
+            let key = serializer.resolve_field_key(name).expect(name);
+            let path = FieldPath::unpack(key);
+            assert_eq!(&path.data[..=path.last], expected, "{name}");
+            assert_eq!(serializer.field_name_for_key(key).as_deref(), Some(name));
+        }
+        for name in [
+            "",
+            "outer",
+            "outer.node",
+            "outer.node.child.stats",
+            "outer.node.child.stats.current.value.extra",
+            "outer.node.items.no_index",
+            "outer.node.items.12.",
+            "outer.node.items.12.missing",
+        ] {
+            assert_eq!(serializer.resolve_field_key(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn reused_flattened_fields_share_the_cached_definition() {
+        let serializers = SerializerContainer::parse(
+            FlattenedSerializer::new(
+                vec![
+                    FlattenedSerializerDefinition::new(Some(0), vec![0, 0]),
+                    FlattenedSerializerDefinition::new(Some(1), vec![0]),
+                ],
+                ["CFirst", "CSecond", "int32", "value"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+                vec![FlattenedField::new(Some(2), Some(3))],
+            ),
+            DecodeProfile::new(
+                super::super::field_decoder::BareCharEncoding::UnsignedVarint,
+                super::super::field_decoder::PreciseQAngleMode::Raw,
+            ),
+        )
+        .unwrap();
+        let first = serializers.get("CFirst").unwrap();
+        let second = serializers.get("CSecond").unwrap();
+        assert!(Arc::ptr_eq(&first.fields[0], &first.fields[1]));
+        assert!(Arc::ptr_eq(&first.fields[0], &second.fields[0]));
+    }
+
+    #[test]
+    fn name_resolution_checks_the_packed_path_depth() {
+        let mut serializer = Serializer {
+            name: "leaf".into(),
+            fields: vec![make_field("value", None)],
+        };
+        let mut path = String::from("value");
+        for depth in 1..=32 {
+            if depth <= 7 {
+                let key = serializer
+                    .resolve_field_key(&path)
+                    .expect("representable path");
+                assert_eq!(FieldPath::unpack(key).last, depth - 1);
+                assert_eq!(
+                    serializer.field_name_for_key(key).as_deref(),
+                    Some(path.as_str())
+                );
+            } else {
+                assert_eq!(serializer.resolve_field_key(&path), None);
+            }
+            let mut parent = make_field("child", None);
+            Arc::make_mut(&mut parent).field_serializer = Some(Arc::new(serializer));
+            serializer = Serializer {
+                name: "parent".into(),
+                fields: vec![parent],
+            };
+            path.insert_str(0, "child.");
+        }
+        let invalid_key = FieldPath {
+            data: [0; 7],
+            last: 7,
+            finished: false,
+        }
+        .pack();
+        assert_eq!(serializer.field_name_for_key(invalid_key), None);
     }
 }

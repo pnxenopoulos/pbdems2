@@ -27,6 +27,22 @@ over checking a real demo into Git. If we need a real demo, we can figure it out
 Add or update a deterministic benchmark for hot-path changes. Use local
 Criterion baselines for comparisons. Hosted CI timing is too noisy. Just report the values in your PR.
 
+## Rust conventions
+
+Shared dependency versions and selected Clippy lints live in the workspace
+`Cargo.toml`. Inherit them in member crates; enable additional lints only when
+these rules improve this codebase.
+
+- Borrow or iterate over data used only for lookup. Allocate when ownership or
+  reuse requires it.
+- Use the map entry API for cache insertion, and preserve shared `Arc` ownership.
+- Propagate malformed-input errors with `?`. Use `expect` only for documented
+  internal invariants, never to validate replay data.
+- Preserve decode limits, byte order, game profiles, and partial-update semantics.
+- Measure changed hot paths against a saved Criterion baseline and verify real
+  replay output when changes affect consumers. Avoid unsafe or forced-inlining
+  optimizations without evidence.
+
 ## Scope
 
 pbdems2 owns game-neutral Source 2 code such as framing, I/O, serializers,
