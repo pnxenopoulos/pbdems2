@@ -244,3 +244,79 @@ fn representative_operations_produce_expected_paths() {
     assert_eq!(&paths[1].data[..=paths[1].last], &[3, 3]);
     assert_eq!(&paths[2].data[..=paths[2].last], &[4]);
 }
+
+#[test]
+fn maximum_depth_paths_can_return_to_the_root() {
+    let mut writer = BitWriter::default();
+    emit_initialized_path(&mut writer);
+    for _ in 0..6 {
+        emit_op(&mut writer, 5); // push one level
+    }
+    for _ in 0..6 {
+        emit_op(&mut writer, 27); // pop one level and increment
+    }
+    emit_op(&mut writer, FINISH);
+    let bytes = writer.finish();
+    let mut paths = Vec::new();
+    super::read_field_paths(&mut BitReader::new(&bytes), &mut paths).unwrap();
+
+    assert_eq!(paths.len(), 13);
+    assert_eq!(paths[6].last, 6);
+    assert_eq!(paths[6].data, [0; 7]);
+    assert_eq!(paths[12].last, 0);
+    assert_eq!(paths[12].data, [1, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn every_push_operation_rejects_excessive_depth() {
+    for index in 5..=26 {
+        let mut writer = BitWriter::default();
+        emit_initialized_path(&mut writer);
+        for _ in 0..6 {
+            emit_op(&mut writer, 5);
+        }
+        emit_op(&mut writer, index);
+        if index == 26 {
+            // This operation first visits every existing path component.
+            for _ in 0..7 {
+                writer.push_bool(false);
+            }
+            writer.push_ubitvar(1);
+            writer.push_ubitvarfp(0);
+        } else {
+            emit_operands(&mut writer, index);
+        }
+        emit_op(&mut writer, FINISH);
+        let bytes = writer.finish();
+        let mut paths = Vec::new();
+        let error = super::read_field_paths(&mut BitReader::new(&bytes), &mut paths)
+            .expect_err("push beyond seven levels must fail");
+
+        assert!(
+            matches!(error, Error::Parse { .. }),
+            "operation {index}: {error}"
+        );
+        assert_eq!(paths.len(), 7, "invalid path must not be emitted");
+    }
+}
+
+#[test]
+fn operations_requiring_a_parent_reject_the_root() {
+    for index in [27, 28, 33, 34, 35, 37] {
+        let mut writer = BitWriter::default();
+        emit_initialized_path(&mut writer);
+        emit_op(&mut writer, index);
+        emit_operands(&mut writer, index);
+        emit_op(&mut writer, FINISH);
+        let bytes = writer.finish();
+        let mut paths = Vec::new();
+        let error = super::read_field_paths(&mut BitReader::new(&bytes), &mut paths)
+            .expect_err("operation requires a parent component");
+
+        assert!(
+            matches!(error, Error::Parse { .. }),
+            "operation {index}: {error}"
+        );
+        assert_eq!(paths.len(), 1, "invalid path must not be emitted");
+    }
+}

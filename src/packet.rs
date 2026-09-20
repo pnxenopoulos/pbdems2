@@ -184,19 +184,16 @@ impl<'a> Iterator for PacketMessageIter<'a> {
         ) {
             return Some(Err(self.fail(bit_offset, Some(message_type), error)));
         }
-        let payload_bits = match encoded_size.checked_mul(8) {
-            Some(value) => value,
-            None => {
-                return Some(Err(self.fail(
-                    bit_offset,
-                    Some(message_type),
-                    Error::Parse {
-                        context: format!(
-                            "inner packet message size {encoded_size} overflows bit length"
-                        ),
-                    },
-                )));
-            }
+        let Some(payload_bits) = encoded_size.checked_mul(8) else {
+            return Some(Err(self.fail(
+                bit_offset,
+                Some(message_type),
+                Error::Parse {
+                    context: format!(
+                        "inner packet message size {encoded_size} overflows bit length"
+                    ),
+                },
+            )));
         };
         let payload_bit_offset = self.reader.position();
         if let Err(error) = self.reader.skip_bits(payload_bits) {
