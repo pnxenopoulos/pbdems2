@@ -30,6 +30,30 @@ fn reference_bits(data: &[u8], start: usize, count: usize) -> u64 {
 
 proptest! {
     #[test]
+    fn bulk_reads_match_bitwise_reference_across_split_reads(
+        data in vec(any::<u8>(), 0..=1024),
+        raw_start in any::<usize>(),
+        raw_length in any::<usize>(),
+        raw_split in any::<usize>(),
+    ) {
+        let start = raw_start % (data.len() * 8 + 1);
+        let length = raw_length % ((data.len() * 8 - start) / 8 + 1);
+        let split = raw_split % (length + 1);
+        let expected: Vec<_> = (0..length)
+            .map(|i| reference_bits(&data, start + i * 8, 8) as u8)
+            .collect();
+        let mut output = vec![0; length];
+        let mut reader = BitReader::new(&data);
+        reader.skip_bits(start).unwrap();
+        reader.read_bytes(&mut output[..split]).unwrap();
+        prop_assert_eq!(reader.position(), start + split * 8);
+        reader.read_bytes(&mut output[split..]).unwrap();
+        prop_assert_eq!(output, expected);
+        prop_assert_eq!(reader.position(), start + length * 8);
+        prop_assert_eq!(reader.bits_remaining(), data.len() * 8 - start - length * 8);
+    }
+
+    #[test]
     fn arbitrary_bit_reads_match_a_bitwise_reference(
         data in vec(any::<u8>(), 1..=40),
         raw_start in any::<usize>(),
@@ -98,6 +122,45 @@ proptest! {
         let mut decoded = Vec::new();
         frames[0].decode_body(&mut decoded).unwrap();
         prop_assert_eq!(decoded, body);
+    }
+}
+
+#[test]
+fn bulk_read_tails_and_failures_preserve_cursor_and_output() {
+    for offset in 0..8 {
+        for length in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+            let data: Vec<_> = (0..=length).map(|i| (i * 37 + 11) as u8).collect();
+            let mut reader = BitReader::new(&data);
+            reader.skip_bits(offset).unwrap();
+            let mut oversized = vec![0xa5; length + 2];
+            assert!(matches!(
+                reader.read_bytes(&mut oversized),
+                Err(pbdems2::Error::Overflow { needed, available })
+                    if needed == oversized.len() * 8 && available == data.len() * 8 - offset
+            ));
+            assert!(oversized.iter().all(|&byte| byte == 0xa5));
+            assert_eq!(reader.position(), offset);
+
+            reader.read_bytes(&mut []).unwrap();
+            assert_eq!(reader.position(), offset);
+            let mut output = vec![0; length];
+            reader.read_bytes(&mut output).unwrap();
+            for (i, &byte) in output.iter().enumerate() {
+                assert_eq!(u64::from(byte), reference_bits(&data, offset + i * 8, 8));
+            }
+            let tail = reader.bits_remaining();
+            assert_eq!(tail, 8 - offset);
+            assert_eq!(
+                reader.read_bits(tail).unwrap(),
+                reference_bits(&data, offset + length * 8, tail)
+            );
+            reader.read_bytes(&mut []).unwrap();
+            assert_eq!(reader.position(), data.len() * 8);
+            let mut sentinel = [0xa5];
+            assert!(reader.read_bytes(&mut sentinel).is_err());
+            assert_eq!(sentinel, [0xa5]);
+            assert_eq!(reader.position(), data.len() * 8);
+        }
     }
 }
 

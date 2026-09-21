@@ -1,0 +1,12 @@
+[package]
+name = "pbdems2-allocation-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+

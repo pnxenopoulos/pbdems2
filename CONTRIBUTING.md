@@ -15,7 +15,7 @@ cargo test --workspace --doc --all-features --locked
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
 cargo deny --all-features check
 cargo package --locked
-cargo bench -p pbdems2-bench --no-run
+cargo bench -p pbdems2-bench --locked -- --test
 cargo llvm-cov clean --workspace
 cargo coverage
 cargo coverage-report
@@ -24,8 +24,30 @@ cargo coverage-report
 Add a focused regression test for parser changes. Prefer a small byte fixture
 over checking a real demo into Git. If we need a real demo, we can figure it out in your PR.
 
-Add or update a deterministic benchmark for hot-path changes. Use local
-Criterion baselines for comparisons. Hosted CI timing is too noisy. Just report the values in your PR.
+Add or update a deterministic benchmark for hot-path changes. Use
+`cargo criterion -p pbdems2-bench --locked` for local measurements and report
+the values in your PR. See the [benchmark guide](crates/pbdems2-bench/README.md)
+for setup, filters, and comparisons. Hosted CI only smoke-tests the suite.
+
+## Rust conventions
+
+Shared dependency versions and selected Clippy lints live in the workspace
+Cargo.toml. Inherit them in member crates. Use borrowed data for lookups, the map
+entry API for cache insertion, and errors for malformed replay input.
+Preserve decode limits, game profiles, and partial-update behavior when optimizing.
+
+## Release checklist
+
+1. Reconcile with the latest published version and keep its regression tests.
+2. Update the library and CLI versions together, refresh Cargo.lock, and add the
+   matching version heading in CHANGELOG.md.
+3. Run the checks above and verify API compatibility against the published crate.
+   A dirty working tree can use cargo package --locked --allow-dirty locally.
+4. Merge to main and wait for CI Check on that exact commit, including macOS and
+   Windows. Then dispatch Release pbdems2 from main.
+
+Benchmark results are not release guarantees. Keep game-specific changes and
+their release notes in the consumer repositories.
 
 ## Scope
 

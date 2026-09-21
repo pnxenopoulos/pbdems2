@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "pbdems2"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "memmap2",
  "proptest",
@@ -418,11 +418,12 @@ dependencies = [
  "pbdems2",
  "rustc-hash",
  "snap",
+ "tempfile",
 ]
 
 [[package]]
 name = "pbdems2-cli"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "clap",
  "pbdems2",

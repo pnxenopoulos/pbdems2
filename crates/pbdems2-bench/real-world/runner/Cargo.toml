@@ -1,0 +1,10 @@
+[package]
+name = "real-world-control"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+awpy.workspace = true
+boon_parser.workspace = true
+serde_json = "1"

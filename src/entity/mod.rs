@@ -13,6 +13,7 @@ mod field_decoder;
 pub mod field_path;
 mod field_value;
 mod quantized_float;
+mod serializer_bindings;
 mod serializers;
 mod string_tables;
 

@@ -1,8 +1,14 @@
 //! Shared fixtures for the pbdems2 benchmark suite.
 //!
-//! Everything here builds deterministic synthetic input so benchmark runs are
-//! comparable across machines and do not depend on real demo files.
+//! Generated inputs and anonymized path-only captures keep runs repeatable
+//! without requiring game protobufs or local demo files.
 #![deny(missing_docs)]
+
+pub mod entity_workloads;
+pub mod field_path_workloads;
+pub mod lookup_workloads;
+pub mod serializer_workloads;
+pub mod workloads;
 
 use std::sync::OnceLock;
 
@@ -251,6 +257,22 @@ fn push_bool_fields(writer: &mut BitWriter, field_count: usize) {
     for index in 0..field_count {
         writer.push_bool(index % 3 == 0);
     }
+}
+
+/// Encode sequential field paths without field values for the Huffman decoder.
+pub fn sequential_field_paths(count: usize) -> Vec<u8> {
+    assert!(count <= 256, "field path indices fit one byte");
+    let (plus_one, finish) = op_codes();
+    let mut writer = BitWriter::default();
+    for _ in 0..count {
+        for &bit in plus_one {
+            writer.push_bool(bit);
+        }
+    }
+    for &bit in finish {
+        writer.push_bool(bit);
+    }
+    writer.finish()
 }
 
 /// Encode `count` entity creates, each setting `field_count` boolean fields.

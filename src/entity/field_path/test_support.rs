@@ -244,3 +244,205 @@ fn representative_operations_produce_expected_paths() {
     assert_eq!(&paths[1].data[..=paths[1].last], &[3, 3]);
     assert_eq!(&paths[2].data[..=paths[2].last], &[4]);
 }
+
+#[test]
+fn maximum_depth_paths_can_return_to_the_root() {
+    let mut writer = BitWriter::default();
+    emit_initialized_path(&mut writer);
+    for _ in 0..6 {
+        emit_op(&mut writer, 5); // push one level
+    }
+    for _ in 0..6 {
+        emit_op(&mut writer, 27); // pop one level and increment
+    }
+    emit_op(&mut writer, FINISH);
+    let bytes = writer.finish();
+    let mut paths = Vec::new();
+    super::read_field_paths(&mut BitReader::new(&bytes), &mut paths).unwrap();
+
+    assert_eq!(paths.len(), 13);
+    assert_eq!(paths[6].last, 6);
+    assert_eq!(paths[6].data, [0; 7]);
+    assert_eq!(paths[12].last, 0);
+    assert_eq!(paths[12].data, [1, 0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn every_push_operation_rejects_excessive_depth() {
+    for index in 5..=26 {
+        let mut writer = BitWriter::default();
+        emit_initialized_path(&mut writer);
+        for _ in 0..6 {
+            emit_op(&mut writer, 5);
+        }
+        emit_op(&mut writer, index);
+        if index == 26 {
+            // This operation first visits every existing path component.
+            for _ in 0..7 {
+                writer.push_bool(false);
+            }
+            writer.push_ubitvar(1);
+            writer.push_ubitvarfp(0);
+        } else {
+            emit_operands(&mut writer, index);
+        }
+        emit_op(&mut writer, FINISH);
+        let bytes = writer.finish();
+        let mut paths = Vec::new();
+        let error = super::read_field_paths(&mut BitReader::new(&bytes), &mut paths)
+            .expect_err("push beyond seven levels must fail");
+
+        assert!(
+            matches!(error, Error::Parse { .. }),
+            "operation {index}: {error}"
+        );
+        assert_eq!(paths.len(), 7, "invalid path must not be emitted");
+    }
+}
+
+#[test]
+fn operations_requiring_a_parent_reject_the_root() {
+    for index in [27, 28, 33, 34, 35, 37] {
+        let mut writer = BitWriter::default();
+        emit_initialized_path(&mut writer);
+        emit_op(&mut writer, index);
+        emit_operands(&mut writer, index);
+        emit_op(&mut writer, FINISH);
+        let bytes = writer.finish();
+        let mut paths = Vec::new();
+        let error = super::read_field_paths(&mut BitReader::new(&bytes), &mut paths)
+            .expect_err("operation requires a parent component");
+
+        assert!(
+            matches!(error, Error::Parse { .. }),
+            "operation {index}: {error}"
+        );
+        assert_eq!(paths.len(), 1, "invalid path must not be emitted");
+    }
+}
+
+fn read_reference(
+    br: &mut BitReader,
+    paths: &mut Vec<super::FieldPath>,
+    limits: &DecodeLimits,
+) -> crate::error::Result<()> {
+    paths.clear();
+    let mut path = super::FieldPath::default();
+    let mut node = &*FIELDOP_HIERARCHY;
+    loop {
+        node = match node {
+            Node::Branch { left, right, .. } => {
+                if br.read_bool()? {
+                    right
+                } else {
+                    left
+                }
+            }
+            Node::Leaf { .. } => unreachable!(),
+        };
+        if let Node::Leaf { op, .. } = node {
+            op(&mut path, br)?;
+            if path.finished {
+                return Ok(());
+            }
+            limits.ensure(
+                "entity field paths",
+                paths.len() + 1,
+                limits.max_field_paths(),
+            )?;
+            paths.push(path);
+            node = &FIELDOP_HIERARCHY;
+        }
+    }
+}
+
+fn compare_reference(bytes: &[u8], offset: usize, limits: &DecodeLimits) {
+    let mut actual_reader = BitReader::new(bytes);
+    let mut reference_reader = BitReader::new(bytes);
+    actual_reader.skip_bits(offset).unwrap();
+    reference_reader.skip_bits(offset).unwrap();
+    let mut actual = vec![super::FieldPath::default()];
+    let mut reference = actual.clone();
+    let actual_result = read_field_paths_with_limits(&mut actual_reader, &mut actual, limits);
+    let reference_result = read_reference(&mut reference_reader, &mut reference, limits);
+    assert_eq!(
+        format!("{actual_result:?}"),
+        format!("{reference_result:?}")
+    );
+    assert_eq!(actual_reader.position(), reference_reader.position());
+    assert_eq!(format!("{actual:?}"), format!("{reference:?}"));
+}
+
+#[test]
+fn prefix_decoder_matches_tree_for_every_op_alignment_truncation_and_limit() {
+    for index in 0..FIELDOP_DESCRIPTORS.len() {
+        for offset in 0..8 {
+            let mut writer = BitWriter::default();
+            writer.push_bits(0, offset);
+            if index != FINISH {
+                if matches!(index, 27..=35 | 37) {
+                    emit_deep_path(&mut writer);
+                } else if index != PLUS_ONE {
+                    emit_initialized_path(&mut writer);
+                }
+                emit_op(&mut writer, index);
+                emit_operands(&mut writer, index);
+            }
+            emit_op(&mut writer, FINISH);
+            let bytes = writer.finish();
+            for end in 0..=bytes.len() {
+                if end * 8 < offset {
+                    continue;
+                }
+                for max_fields in [0, 1, 3, usize::MAX] {
+                    compare_reference(
+                        &bytes[..end],
+                        offset,
+                        &DecodeLimits::default().with_max_field_paths(max_fields),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn prefix_decoder_matches_tree_at_maximum_path_depth_and_before_following_data() {
+    let mut writer = BitWriter::default();
+    emit_initialized_path(&mut writer);
+    for _ in 0..2 {
+        emit_op(&mut writer, 15);
+        emit_operands(&mut writer, 15);
+    }
+    emit_op(&mut writer, PLUS_ONE);
+    emit_op(&mut writer, FINISH);
+    writer.push_bits(0xabcdef1234567890, 64);
+    let bytes = writer.finish();
+    compare_reference(&bytes, 0, &DecodeLimits::default());
+}
+
+#[test]
+fn every_prefix_entry_agrees_with_the_tree_code_and_length() {
+    for (value, entry) in super::FIELDOP_PREFIX.iter().enumerate() {
+        let mut node = &*FIELDOP_HIERARCHY;
+        let mut bits = 0;
+        while let Node::Branch { left, right, .. } = node {
+            if bits == super::PREFIX_BITS {
+                break;
+            }
+            node = if value & (1 << bits) == 0 {
+                left
+            } else {
+                right
+            };
+            bits += 1;
+        }
+        match node {
+            Node::Leaf { num, .. } => {
+                assert_eq!(usize::from(entry.bits), bits);
+                assert!(std::ptr::fn_addr_eq(entry.op, FIELDOP_DESCRIPTORS[*num].op));
+            }
+            Node::Branch { .. } => assert_eq!(entry.bits, 0),
+        }
+    }
+}

@@ -4,6 +4,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use pbdems2::entity::{
     CreateStringTable, StringTableContainer, StringTableEntry, UpdateStringTable,
 };
+use pbdems2_bench::workloads::table_with_user_data;
 use pbdems2_bench::{create_string_table, string_table_bits};
 
 fn create_and_update_benchmarks(criterion: &mut Criterion) {
@@ -89,9 +90,36 @@ fn snapshot_and_lookup_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn user_data_benchmarks(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("string_table_user_data");
+    for size in [64, 4096] {
+        for compressed in [false, true] {
+            let fixture = table_with_user_data(64, size, compressed);
+            let name = if compressed { "snappy" } else { "raw" };
+            group.throughput(Throughput::Bytes((64 * size) as u64));
+            group.bench_function(BenchmarkId::new(name, size), |b| {
+                b.iter_batched(
+                    || {
+                        CreateStringTable::new("payloads", 64, fixture.string_data.clone())
+                            .with_flags(1)
+                    },
+                    |message| {
+                        let mut tables = StringTableContainer::new();
+                        tables.handle_create(message).expect("valid user data");
+                        black_box(tables)
+                    },
+                    BatchSize::SmallInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     create_and_update_benchmarks,
-    snapshot_and_lookup_benchmarks
+    snapshot_and_lookup_benchmarks,
+    user_data_benchmarks
 );
 criterion_main!(benches);

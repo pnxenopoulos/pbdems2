@@ -74,18 +74,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Detect a published baseline
-        id: baseline
-        run: |
-          if curl -fsS -A "pbdems2-ci" -o /dev/null "https://crates.io/api/v1/crates/pbdems2"; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "No published pbdems2 release exists yet; compatibility check is not applicable."
-          fi
-
       - name: Check the public API against crates.io
-        if: steps.baseline.outputs.exists == 'true'
+        # The crate is published. Registry errors must fail, not skip this gate.
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: pbdems2
@@ -140,7 +130,7 @@ jobs:
         run: cargo check --workspace --all-targets --all-features --locked
 
   benchmarks:
-    name: Compile benchmarks
+    name: Validate benchmarks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -153,8 +143,8 @@ jobs:
         with:
           key: benchmarks-stable
 
-      - name: Compile every benchmark target
-        run: cargo bench -p pbdems2-bench --no-run --locked
+      - name: Smoke-test every benchmark target
+        run: cargo bench -p pbdems2-bench --locked -- --test
 
   coverage:
     name: Coverage

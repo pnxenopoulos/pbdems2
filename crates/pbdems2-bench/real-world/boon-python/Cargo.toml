@@ -1,0 +1,18 @@
+[package]
+name = "boon-profile-extension"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "_boon"
+crate-type = ["cdylib"]
+path = "../../../../../boon/crates/boon-python/src/lib.rs"
+
+[dependencies]
+boon_parser.workspace = true
+boon-proto.workspace = true
+prost.workspace = true
+pyo3 = { workspace = true, features = ["multiple-pymethods"] }
+pyo3-polars.workspace = true
+polars.workspace = true

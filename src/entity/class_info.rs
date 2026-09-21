@@ -39,6 +39,9 @@ impl ClassEntry {
 /// Maps Source 2 class IDs to their network serializer names.
 #[derive(Debug, Clone)]
 pub struct ClassInfo {
+    // Clones describe the same immutable schema. Holding this token prevents
+    // address reuse from making a replacement table look like the old one.
+    schema_id: Arc<()>,
     classes: Vec<ClassEntry>,
     bits: usize,
     lookup: Vec<Option<usize>>,
@@ -49,6 +52,7 @@ impl ClassInfo {
     /// Create an empty class map.
     pub fn empty() -> Self {
         Self {
+            schema_id: Arc::new(()),
             classes: Vec::new(),
             bits: 1,
             lookup: Vec::new(),
@@ -110,11 +114,16 @@ impl ClassInfo {
         }
 
         Ok(Self {
+            schema_id: Arc::new(()),
             classes,
             bits,
             lookup,
             name_lookup,
         })
+    }
+
+    pub(crate) fn schema_id(&self) -> &Arc<()> {
+        &self.schema_id
     }
 
     /// All class entries in adapter-provided order.

@@ -53,7 +53,7 @@ impl<'a> ByteReader<'a> {
     }
 
     fn check_remaining(&self, n: usize) -> Result<()> {
-        if self.position + n > self.data.len() {
+        if n > self.remaining() {
             return Err(Error::Overflow {
                 needed: n,
                 available: self.remaining(),
@@ -154,6 +154,22 @@ impl<'a> ByteReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_read_and_skip_preserve_cursor() {
+        let mut reader = ByteReader::new(&[1, 2, 3]);
+        reader.skip(1).unwrap();
+        assert!(matches!(
+            reader.read_bytes(usize::MAX),
+            Err(Error::Overflow { .. })
+        ));
+        assert!(matches!(
+            reader.skip(usize::MAX),
+            Err(Error::Overflow { .. })
+        ));
+        assert_eq!(reader.position(), 1);
+        assert_eq!(reader.read_u8().unwrap(), 2);
+    }
 
     #[test]
     fn test_read_u32() {
