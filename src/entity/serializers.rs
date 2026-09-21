@@ -227,7 +227,7 @@ pub struct Serializer {
 impl Serializer {
     /// Resolve a dotted field name (e.g. "m_pGameRules.m_bGamePaused") to a packed u64 key.
     /// Walks the serializer hierarchy matching send_node + var_name against path components.
-    /// Returns None when the name cannot fit in the seven-level packed path.
+    /// Returns `None` when the name cannot fit in the seven-level packed path.
     pub fn resolve_field_key(&self, path: &str) -> Option<u64> {
         // A single component needs no temporary heap allocation.
         if !path.contains('.') {

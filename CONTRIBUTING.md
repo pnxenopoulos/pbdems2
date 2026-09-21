@@ -32,9 +32,18 @@ for setup, filters, and comparisons. Hosted CI only smoke-tests the suite.
 ## Rust conventions
 
 Shared dependency versions and selected Clippy lints live in the workspace
-Cargo.toml. Inherit them in member crates. Use borrowed data for lookups, the map
-entry API for cache insertion, and errors for malformed replay input.
-Preserve decode limits, game profiles, and partial-update behavior when optimizing.
+`Cargo.toml`. Inherit them in member crates. Enable additional lints only when
+they improve this codebase.
+
+- Borrow or iterate over data used only for lookup. Allocate when ownership or
+  reuse requires it.
+- Use the map entry API for cache insertion, and preserve shared `Arc` ownership.
+- Propagate malformed-input errors with `?`. Use `expect` only for documented
+  internal invariants, never to validate replay data.
+- Preserve decode limits, byte order, game profiles, and partial-update semantics.
+- Measure changed hot paths against a saved Criterion baseline and verify real
+  replay output when changes affect consumers. Avoid unsafe or forced-inlining
+  optimizations without evidence.
 
 ## Release checklist
 
