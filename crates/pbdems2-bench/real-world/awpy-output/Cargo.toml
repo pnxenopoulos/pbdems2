@@ -1,0 +1,21 @@
+[package]
+name = "awpy-output-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+awpy.workspace = true
+polars = { workspace = true, features = ["dtype-full"] }
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+pbdems2-allocation-probe = { path = "../allocation-probe" }
+
+[[bench]]
+name = "snapshots"
+harness = false
+
+[[bench]]
+name = "row_construction"
+harness = false

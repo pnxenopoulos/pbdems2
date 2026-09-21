@@ -1,0 +1,37 @@
+[workspace]
+members = ["awpy-python", "boon-python", "runner", "awpy-output", "allocation-probe"]
+resolver = "2"
+
+[workspace.dependencies]
+awpy = { path = "../../../../awpy-github/awpy/crates/awpy" }
+awpy-proto = { path = "../../../../awpy-github/awpy/crates/awpy-proto" }
+boon_parser = { path = "../../../../boon/crates/boon", package = "boon-deadlock" }
+boon-proto = { path = "../../../../boon/crates/boon-proto" }
+prost = "0.14"
+pyo3 = { version = "0.27", features = ["extension-module"] }
+pyo3-polars = "0.26"
+polars = "0.53"
+
+[patch.crates-io]
+pbdems2 = { path = "../../.." }
+
+[profile.release]
+lto = true
+codegen-units = 1
+debug = 1
+strip = false
+
+[profile.release.package.pbdems2]
+debug = 2
+
+[profile.release.package.awpy]
+debug = 2
+
+[profile.release.package.boon-deadlock]
+debug = 2
+
+[profile.release.package.awpy-profile-extension]
+debug = 2
+
+[profile.release.package.boon-profile-extension]
+debug = 2

@@ -16,6 +16,116 @@ const PROFILE: DecodeProfile = DecodeProfile::new(
     PreciseQAngleMode::Centered,
 );
 
+#[test]
+fn entity_updates_use_replaced_serializer_schema_after_clone_and_reset() {
+    let class_info = classes();
+    let original = serializers();
+    let tables = StringTableContainer::new();
+    let mut entities = EntityContainer::new();
+    apply_packet(
+        &mut entities,
+        &create_packet(0, true),
+        &class_info,
+        &original,
+        &tables,
+    )
+    .unwrap();
+    let mut cloned = entities.clone();
+    let replacement = SerializerContainer::parse(
+        FlattenedSerializer::new(
+            vec![FlattenedSerializerDefinition::new(Some(0), vec![0])],
+            vec!["CTest".into(), "uint32".into(), "m_flag".into()],
+            vec![FlattenedField::new(Some(1), Some(2))],
+        ),
+        PROFILE,
+    )
+    .unwrap();
+    let mut writer = packet_writer(0, 0);
+    emit_op(
+        &mut writer,
+        crate::entity::field_path::test_support::PLUS_ONE,
+    );
+    emit_op(&mut writer, FINISH);
+    writer.push_uvarint32(77);
+    apply_packet(
+        &mut cloned,
+        &writer.finish(),
+        &class_info,
+        &replacement,
+        &tables,
+    )
+    .unwrap();
+    assert_eq!(cloned.get(0).unwrap().get_u32(Some(field_key(0))), 77);
+    apply_packet(
+        &mut entities,
+        &update_packet(0, false),
+        &class_info,
+        &original,
+        &tables,
+    )
+    .unwrap();
+    assert!(!entities.get(0).unwrap().get_bool(Some(field_key(0))));
+
+    cloned = EntityContainer::new();
+    apply_packet(
+        &mut cloned,
+        &create_packet(0, true),
+        &class_info,
+        &original,
+        &tables,
+    )
+    .unwrap();
+    assert!(cloned.get(0).unwrap().get_bool(Some(field_key(0))));
+}
+
+proptest::proptest! {
+    #[test]
+    fn occupancy_matches_slots_after_mixed_mutations(
+        operations in proptest::collection::vec((0_u8..7, 0_usize..64), 0..256),
+    ) {
+        let mut entities = EntityContainer::new();
+        for (operation, index) in operations {
+            match operation {
+                0 => { entities.insert(Entity::new(index as i32, 0, "CTest".into())).unwrap(); }
+                1 => entities.put_entity(index as i32, Entity::new(index as i32, 0, "CTest".into())),
+                2 => entities.delete_entity(index as i32),
+                3 => entities.handle_leave(index as i32, false),
+                4 => entities.reserve_slots(index).unwrap(),
+                5 => entities.clear_tick_changes(),
+                _ => entities = entities.clone(),
+            }
+            let expected = entities.slots().iter().filter(|slot| slot.is_some()).count();
+            proptest::prop_assert_eq!(entities.len(), expected);
+            proptest::prop_assert_eq!(entities.is_empty(), expected == 0);
+            proptest::prop_assert_eq!(entities.iter().count(), expected);
+        }
+    }
+}
+
+#[test]
+fn occupancy_survives_rejected_mutations_and_clone_changes() {
+    let mut entities = EntityContainer::new();
+    entities.insert(Entity::new(5, 0, "CTest".into())).unwrap();
+    assert!(entities.insert(Entity::new(-1, 0, "CTest".into())).is_err());
+    assert!(
+        entities
+            .reserve_slots(MAX_ENTITY_INDEX as usize + 2)
+            .is_err()
+    );
+    assert!(entities.take_entity(-1).is_none());
+    assert!(entities.take_entity(16_384).is_none());
+    let mut cloned = entities.clone();
+    cloned.delete_entity(5);
+    cloned.delete_entity(5);
+    assert!(cloned.is_empty());
+    assert_eq!(cloned.len(), 0);
+    assert_eq!(entities.len(), 1);
+    assert!(!entities.is_empty());
+    entities.reserve_slots(5).unwrap();
+    assert_eq!(entities.len(), 0);
+    assert!(entities.is_empty());
+}
+
 fn field_key(index: u8) -> u64 {
     FieldPath {
         data: [index, 0, 0, 0, 0, 0, 0],
@@ -367,6 +477,8 @@ fn packet_lifecycle_creates_leaves_reactivates_and_deletes() {
     )
     .unwrap();
     assert!(entities.get(5).is_none());
+    assert!(entities.is_empty());
+    assert_eq!(entities.len(), 0);
     let deleted = &entities.entity_changes()[0];
     assert_eq!(deleted.kind, EntityChangeKind::Deleted);
     assert_eq!((deleted.index, deleted.serial, deleted.class_id), (5, 7, 0));
@@ -399,6 +511,7 @@ fn slot_reuse_emits_old_delete_before_new_create() {
     .unwrap();
 
     let changes = entities.entity_changes();
+    assert_eq!(entities.len(), 1);
     assert_eq!(changes.len(), 2);
     assert_eq!(
         (changes[0].kind, changes[0].index, changes[0].serial),
@@ -474,6 +587,8 @@ fn filtered_packets_track_selected_classes_and_skip_other_updates() {
     .unwrap();
     assert!(entities.get(2).is_none());
     assert_eq!(entities.skipped_class(2), Some(0));
+    assert!(entities.is_empty());
+    assert_eq!(entities.len(), 0);
     assert_eq!(entities.entity_changes().len(), 1);
     assert_eq!(
         entities.entity_changes()[0].kind,
@@ -505,6 +620,7 @@ fn filtered_packets_track_selected_classes_and_skip_other_updates() {
     )
     .unwrap();
     assert!(entities.get(2).is_some());
+    assert_eq!(entities.len(), 1);
     assert_eq!(entities.skipped_class(2), None);
     assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Created);
     entities.clear_tick_changes();
@@ -549,6 +665,8 @@ fn filtered_packets_track_selected_classes_and_skip_other_updates() {
     .unwrap();
     assert!(entities.get(2).is_none());
     assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Deleted);
+    assert!(entities.is_empty());
+    assert_eq!(entities.len(), 0);
 }
 
 #[test]

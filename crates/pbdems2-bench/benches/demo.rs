@@ -1,10 +1,11 @@
 use std::hint::black_box;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use pbdems2::demo::{
     CmdHeader, Demo, MAGIC, command, read_cmd_body, read_cmd_header, verify_header,
 };
 use pbdems2::io::ByteReader;
+use pbdems2_bench::workloads::varied_bytes;
 
 const BODY_SIZE: usize = 64 * 1024;
 const COMPRESSED_FLAG: u32 = 1 << 31;
@@ -131,5 +132,43 @@ fn command_body_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, framing_benchmarks, command_body_benchmarks);
+fn compression_benchmarks(criterion: &mut Criterion) {
+    let mut group = criterion.benchmark_group("command_body_scaling");
+    for size in [64, 4096, 65_536] {
+        for (name, body) in [
+            ("repeated", vec![0x5a; size]),
+            ("varied", varied_bytes(size)),
+        ] {
+            let encoded = snap::raw::Encoder::new()
+                .compress_vec(&body)
+                .expect("valid input");
+            let header = CmdHeader::new(1, 1, true, encoded.len() as u32);
+            group.throughput(Throughput::Bytes(size as u64));
+            group.bench_function(BenchmarkId::new(name, size), |b| {
+                let mut scratch = Vec::with_capacity(size);
+                // Verify the compressed data before measuring buffer reuse.
+                read_cmd_body(&mut ByteReader::new(&encoded), &header, &mut scratch)
+                    .expect("valid body");
+                assert_eq!(scratch, body);
+                b.iter(|| {
+                    read_cmd_body(
+                        &mut ByteReader::new(black_box(&encoded)),
+                        &header,
+                        &mut scratch,
+                    )
+                    .expect("valid body");
+                    black_box(&scratch);
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    framing_benchmarks,
+    command_body_benchmarks,
+    compression_benchmarks
+);
 criterion_main!(benches);

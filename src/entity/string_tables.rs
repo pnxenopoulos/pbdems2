@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 
 use crate::error::{Error, Result};
 use crate::io::BitReader;
@@ -218,10 +218,10 @@ impl StringTable {
         )?;
 
         let mut entry_index: i64 = -1;
-        let mut history: Vec<[u8; MAX_STRING_SIZE]> = vec![[0u8; MAX_STRING_SIZE]; HISTORY_SIZE];
+        let mut history = [[0u8; MAX_STRING_SIZE]; HISTORY_SIZE];
         let mut history_delta_index: usize = 0;
-        let mut string_buf = vec![0u8; 1024];
-        let mut user_data_buf = vec![0u8; MAX_USERDATA_SIZE];
+        let mut string_buf = [0u8; 1024];
+        let mut user_data_buf = Vec::new();
         let mut user_data_uncompressed_buf = Vec::new();
 
         for _ in 0..entry_count {
@@ -290,14 +290,16 @@ impl StringTable {
                         size_bits.div_ceil(8),
                         limits.max_string_table_user_data_bytes(),
                     )?;
-                    if size > user_data_buf.len() || size_bits.div_ceil(8) > user_data_buf.len() {
+                    let required = size.max(size_bits.div_ceil(8));
+                    if required > MAX_USERDATA_SIZE {
                         return Err(Error::Parse {
                             context: format!(
                                 "string-table fixed user data ({size} bytes / {size_bits} bits) exceeds {} bytes",
-                                user_data_buf.len()
+                                MAX_USERDATA_SIZE
                             ),
                         });
                     }
+                    user_data_buf.resize(required, 0);
                     br.read_bits_to_bytes(&mut user_data_buf, size_bits)?;
                     Some(user_data_buf[..size].to_vec())
                 } else {
@@ -317,14 +319,15 @@ impl StringTable {
                         size,
                         limits.max_string_table_user_data_bytes(),
                     )?;
-                    if size > user_data_buf.len() {
+                    if size > MAX_USERDATA_SIZE {
                         return Err(Error::Parse {
                             context: format!(
                                 "string-table user data size {size} exceeds {} bytes",
-                                user_data_buf.len()
+                                MAX_USERDATA_SIZE
                             ),
                         });
                     }
+                    user_data_buf.resize(size, 0);
                     br.read_bytes(&mut user_data_buf[..size])?;
 
                     if is_compressed {
@@ -551,9 +554,15 @@ impl StringTableContainer {
                 if let (Some(s), Some(data)) = (&entry.string, &entry.user_data)
                     && let Ok(class_id) = s.parse::<i32>()
                 {
-                    // Only clone if new or changed
-                    if self.instance_baselines.get(&class_id) != Some(data) {
-                        self.instance_baselines.insert(class_id, data.clone());
+                    match self.instance_baselines.entry(class_id) {
+                        Entry::Occupied(mut entry) => {
+                            if entry.get() != data {
+                                entry.get_mut().clone_from(data);
+                            }
+                        }
+                        Entry::Vacant(entry) => {
+                            entry.insert(data.clone());
+                        }
                     }
                 }
             }

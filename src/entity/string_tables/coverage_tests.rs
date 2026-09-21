@@ -79,6 +79,30 @@ fn parses_fixed_width_user_data_with_partial_final_byte() {
 }
 
 #[test]
+fn variable_user_data_scratch_handles_shrinking_and_growing_entries() {
+    let mut writer = BitWriter::default();
+    for size in [256, 0, 3, 1024, 1] {
+        push_raw_entry(&mut writer, None, Some(&vec![size as u8; size]));
+    }
+    let mut tables = StringTableContainer::new();
+    tables
+        .handle_create(CreateStringTable::new("sizes", 5, writer.finish()))
+        .unwrap();
+    for (entry, size) in tables
+        .find_table("sizes")
+        .unwrap()
+        .entries()
+        .iter()
+        .zip([256, 0, 3, 1024, 1])
+    {
+        assert_eq!(
+            entry.user_data.as_deref(),
+            Some(vec![size as u8; size].as_slice())
+        );
+    }
+}
+
+#[test]
 fn decompresses_outer_table_data_and_inner_entry_data() {
     let expected = b"repeated payload repeated payload";
     let compressed_user_data = snap::raw::Encoder::new().compress_vec(expected).unwrap();

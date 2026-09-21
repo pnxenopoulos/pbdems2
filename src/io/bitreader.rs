@@ -182,32 +182,42 @@ impl<'a> BitReader<'a> {
 
     /// Read N bytes into the provided buffer.
     pub fn read_bytes(&mut self, buf: &mut [u8]) -> Result<()> {
-        let needed = buf.len() * 8;
-        if self.position + needed > self.total_bits {
+        if buf.len() > self.bits_remaining() / 8 {
             return Err(Error::Overflow {
-                needed,
+                needed: buf.len().saturating_mul(8),
                 available: self.bits_remaining(),
             });
         }
-
-        // Fast path: byte-aligned — direct memcpy.
-        if self.position.is_multiple_of(8) {
-            let byte_pos = self.position / 8;
-            buf.copy_from_slice(&self.data[byte_pos..byte_pos + buf.len()]);
-            self.position += needed;
+        if buf.is_empty() {
             return Ok(());
         }
 
-        // Slow path: unaligned — read byte at a time via bit extraction.
-        for byte in buf.iter_mut() {
-            *byte = self.peek_bits_unchecked(8) as u8;
-            self.position += 8;
+        let byte_pos = self.position / 8;
+        let shift = self.position % 8;
+        // Fast path: byte-aligned — direct memcpy.
+        if shift == 0 {
+            buf.copy_from_slice(&self.data[byte_pos..byte_pos + buf.len()]);
+        } else {
+            // Every output byte straddles two input bytes. The bounds check
+            // above guarantees the extra byte, including at the short tail.
+            let input = &self.data[byte_pos..byte_pos + buf.len() + 1];
+            for ((output, low), high) in buf.iter_mut().zip(input).zip(&input[1..]) {
+                *output = (low >> shift) | (high << (8 - shift));
+            }
         }
+        self.position += buf.len() * 8;
         Ok(())
     }
 
     /// Read a specified number of bits into a byte buffer, filling LSB-first.
     pub fn read_bits_to_bytes(&mut self, buf: &mut [u8], bits: usize) -> Result<()> {
+        let needed = bits.div_ceil(8);
+        if needed > buf.len() {
+            return Err(Error::Overflow {
+                needed,
+                available: buf.len(),
+            });
+        }
         let full_bytes = bits / 8;
         let remaining_bits = bits % 8;
 
@@ -440,7 +450,7 @@ impl<'a> BitReader<'a> {
 
     /// Skip forward by N bits.
     pub fn skip_bits(&mut self, n: usize) -> Result<()> {
-        if self.position + n > self.total_bits {
+        if n > self.bits_remaining() {
             return Err(Error::Overflow {
                 needed: n,
                 available: self.bits_remaining(),
@@ -543,6 +553,32 @@ fn mask(n: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_skip_preserves_cursor() {
+        let mut reader = BitReader::new(&[0xff]);
+        reader.skip_bits(1).unwrap();
+        assert!(matches!(
+            reader.skip_bits(usize::MAX),
+            Err(Error::Overflow { .. })
+        ));
+        assert_eq!(reader.position(), 1);
+        assert_eq!(reader.read_bits(7).unwrap(), 127);
+    }
+
+    #[test]
+    fn bit_copy_rejects_short_output_before_consuming_input() {
+        for bits in [9, 16, usize::MAX] {
+            let mut reader = BitReader::new(&[0xff; 4]);
+            let mut output = [0x55];
+            assert!(matches!(
+                reader.read_bits_to_bytes(&mut output, bits),
+                Err(Error::Overflow { .. })
+            ));
+            assert_eq!(reader.position(), 0);
+            assert_eq!(output, [0x55]);
+        }
+    }
 
     #[test]
     fn test_read_u8_unaligned() {

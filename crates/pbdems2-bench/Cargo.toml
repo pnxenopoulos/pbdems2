@@ -5,11 +5,15 @@ edition = "2024"
 rust-version = "1.88.0"
 publish = false
 
+[lib]
+bench = false
+
 [dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support", "html_reports"] }
-pbdems2.workspace = true
+pbdems2 = { workspace = true, features = ["mmap"] }
 rustc-hash.workspace = true
 snap.workspace = true
+tempfile.workspace = true
 
 [[bench]]
 name = "io"
@@ -35,6 +39,33 @@ harness = false
 name = "string_tables"
 harness = false
 
+[[bench]]
+name = "packet"
+harness = false
+
+[[bench]]
+name = "playback"
+harness = false
+
+[[bench]]
+name = "input"
+harness = false
+
+[[bench]]
+name = "access"
+harness = false
+
+[[bench]]
+name = "entity_pipeline"
+harness = false
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "field_paths"
+harness = false
+
+[[bench]]
+name = "serializer_access"
+harness = false

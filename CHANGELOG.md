@@ -2,6 +2,28 @@
 
 Notable pbdems2 changes live here.
 
+## v0.3.2
+
+- Decode common field-path Huffman operations through a safe prefix table,
+  with the original tree path for long codes and short input tails.
+- Reuse class-ID serializer bindings during entity updates. Schema replacement,
+  cloned sessions, filtering, and manually inserted entities keep their behavior.
+- Sped up single-component field-name lookups while keeping the public API and
+  field-name matching behavior.
+- Sped up unaligned bulk byte reads with a safe adjacent-byte copy loop.
+- Made entity counts and empty checks constant time while preserving dormant,
+  replaced, deleted, and truncated-slot behavior.
+- Reduced temporary allocations in string-table decoding.
+- Shared the tracked entity-update path between filtered and unfiltered decoding.
+- Return bounds errors for oversized reader skips, byte reads, and short bit-copy
+  output buffers instead of overflowing or panicking.
+- Expanded benchmarks for packet framing, alignment, compression, filtering,
+  prepared playback, seeking, and mmap input. Added cargo-criterion instructions,
+  measured results, and benchmark smoke tests in CI.
+- Added real-demo field-path captures, differential decoder tests, and paired
+  Awpy/Boon dataset checks. Private profiling tools measure CPU and allocation
+  costs without adding dependencies or instrumentation to the published library.
+
 ## v0.3.1
 
 - Resolve serializer names with borrowed iterators and build dotted names in one

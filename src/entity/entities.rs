@@ -10,6 +10,7 @@ use super::class_info::ClassInfo;
 use super::field_decoder::FieldDecodeContext;
 use super::field_path::{self, FieldPath};
 use super::field_value::FieldValue;
+use super::serializer_bindings::SerializerBindings;
 use super::serializers::{Serializer, SerializerContainer, SerializerField};
 use super::string_tables::StringTableContainer;
 
@@ -348,6 +349,11 @@ impl Entity {
     }
 
     /// Resolve a dotted field path and return its current value.
+    ///
+    /// For repeated reads, resolve the key once with
+    /// [Serializer::resolve_field_key] and use [Self::field_value] or a typed
+    /// accessor. Keys are specific to a serializer layout. Resolve them again
+    /// when the schema changes.
     pub fn get_by_name(&self, path: &str, serializer: &Serializer) -> Option<&FieldValue> {
         let key = serializer.resolve_field_key(path)?;
         self.fields.get(&key)
@@ -518,12 +524,15 @@ impl Entity {
 /// Container managing all active entities.
 #[derive(Clone, Default)]
 pub struct EntityContainer {
+    serializer_bindings: SerializerBindings,
     /// Active (and dormant) entities, indexed **directly by entity index** — a
     /// dense slot array rather than a hash map, so every `get` / `get_mut` /
     /// `get_by_handle` (which fire on essentially every entity update) is a
     /// bounds-checked index instead of a hash lookup. Indices are `0..=16383`;
     /// empty slots hold `None`.
     entities: Vec<Option<Entity>>,
+    /// Number of occupied slots, including dormant entities.
+    occupied_count: usize,
     /// `class_id` per index for entities that were filtered out at create time,
     /// so a later filtered update can pick the right serializer to advance past
     /// them. `-1` means "no skipped entity here". Same dense-slot layout.
@@ -540,7 +549,9 @@ impl EntityContainer {
         Self::default()
     }
 
-    /// Ensure the dense slot array contains `slot_count` entries.
+    /// Resize the dense slot array to `slot_count` entries.
+    ///
+    /// Shrinking discards entities beyond the new end without lifecycle events.
     pub fn reserve_slots(&mut self, slot_count: usize) -> Result<()> {
         let max_slots = MAX_ENTITY_INDEX as usize + 1;
         if slot_count > max_slots {
@@ -549,6 +560,12 @@ impl EntityContainer {
                 limit: max_slots,
                 actual: slot_count,
             });
+        }
+        if slot_count < self.entities.len() {
+            self.occupied_count -= self.entities[slot_count..]
+                .iter()
+                .filter(|slot| slot.is_some())
+                .count();
         }
         self.entities.resize_with(slot_count, || None);
         Ok(())
@@ -567,6 +584,7 @@ impl EntityContainer {
         }
         let created = EntityChange::from_entity(EntityChangeKind::Created, &entity);
         let previous = self.entities[index].replace(entity);
+        self.occupied_count += usize::from(previous.is_none());
         if let Some(previous) = previous.as_ref() {
             self.changes.push(EntityChange::from_entity(
                 EntityChangeKind::Deleted,
@@ -608,6 +626,7 @@ impl EntityContainer {
         }
         let created = EntityChange::from_entity(EntityChangeKind::Created, &entity);
         let previous = self.entities[i].replace(entity);
+        self.occupied_count += usize::from(previous.is_none());
         if let Some(previous) = previous.as_ref() {
             self.changes.push(EntityChange::from_entity(
                 EntityChangeKind::Deleted,
@@ -621,10 +640,12 @@ impl EntityContainer {
     /// Empty an entity's slot without recording why it was removed.
     #[inline]
     fn take_entity(&mut self, index: i32) -> Option<Entity> {
-        usize::try_from(index)
-            .ok()
-            .and_then(|i| self.entities.get_mut(i))
-            .and_then(Option::take)
+        let entity = self
+            .entities
+            .get_mut(usize::try_from(index).ok()?)?
+            .take()?;
+        self.occupied_count -= 1;
+        Some(entity)
     }
 
     /// Permanently remove an entity and retain its old identity in the log.
@@ -687,6 +708,7 @@ impl EntityContainer {
             limits.max_packet_entity_updates(),
         )?;
         let has_pvs_vis_bits = msg.has_pvs_vis_bits;
+        self.serializer_bindings.refresh(class_info, serializers);
         let entity_data = msg.entity_data;
         let mut br = BitReader::new(entity_data);
 
@@ -798,6 +820,7 @@ impl EntityContainer {
             limits.max_packet_entity_updates(),
         )?;
         let has_pvs_vis_bits = msg.has_pvs_vis_bits;
+        self.serializer_bindings.refresh(class_info, serializers);
         let entity_data = msg.entity_data;
         let mut br = BitReader::new(entity_data);
 
@@ -881,12 +904,12 @@ impl EntityContainer {
             context: format!("unknown class_id {class_id}"),
         })?;
 
-        let serializer =
-            serializers
-                .get(&class_entry.network_name)
-                .ok_or_else(|| Error::Parse {
-                    context: format!("no serializer for {}", class_entry.network_name),
-                })?;
+        let serializer = self
+            .serializer_bindings
+            .get(class_id, &class_entry.network_name, serializers)
+            .ok_or_else(|| Error::Parse {
+                context: format!("no serializer for {}", class_entry.network_name),
+            })?;
 
         let mut entity = Entity::new(index, class_id, Arc::clone(&class_entry.network_name));
         entity.serial = serial;
@@ -931,11 +954,13 @@ impl EntityContainer {
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
         let change = {
-            let Some(entity) = self.entity_mut(index) else {
-                return Err(Error::Parse {
+            let entity = usize::try_from(index)
+                .ok()
+                .and_then(|i| self.entities.get_mut(i))
+                .and_then(Option::as_mut)
+                .ok_or_else(|| Error::Parse {
                     context: format!("tried to update non-existent entity #{index}"),
-                });
-            };
+                })?;
             let kind = if entity.active {
                 EntityChangeKind::Updated
             } else {
@@ -943,8 +968,9 @@ impl EntityContainer {
             };
             entity.active = true;
 
-            let serializer = serializers
-                .get(&entity.class_name)
+            let serializer = self
+                .serializer_bindings
+                .get(entity.class_id, &entity.class_name, serializers)
                 .ok_or_else(|| Error::Parse {
                     context: format!("no serializer for {}", entity.class_name),
                 })?;
@@ -978,12 +1004,12 @@ impl EntityContainer {
             context: format!("unknown class_id {class_id}"),
         })?;
 
-        let serializer =
-            serializers
-                .get(&class_entry.network_name)
-                .ok_or_else(|| Error::Parse {
-                    context: format!("no serializer for {}", class_entry.network_name),
-                })?;
+        let serializer = self
+            .serializer_bindings
+            .get(class_id, &class_entry.network_name, serializers)
+            .ok_or_else(|| Error::Parse {
+                context: format!("no serializer for {}", class_entry.network_name),
+            })?;
 
         // A create is a fresh entity at this slot. Clear any stale entry for the
         // index from the *other* map so a later update can't misroute to a
@@ -1030,27 +1056,7 @@ impl EntityContainer {
     ) -> Result<bool> {
         // Check if we're tracking this entity
         if self.get(index).is_some() {
-            let change = {
-                let entity = self.entity_mut(index).expect("entity checked above");
-                let kind = if entity.active {
-                    EntityChangeKind::Updated
-                } else {
-                    EntityChangeKind::Reactivated
-                };
-                entity.active = true;
-
-                let serializer =
-                    serializers
-                        .get(&entity.class_name)
-                        .ok_or_else(|| Error::Parse {
-                            context: format!("no serializer for {}", entity.class_name),
-                        })?;
-
-                entity.apply_update(br, serializer, field_decode_ctx, fp_buf)?;
-                EntityChange::from_entity(kind, entity)
-            };
-            self.updated.push(index);
-            self.changes.push(change);
+            self.handle_update(index, br, serializers, field_decode_ctx, fp_buf)?;
             return Ok(true);
         }
 
@@ -1060,12 +1066,12 @@ impl EntityContainer {
                 context: format!("unknown class_id {class_id}"),
             })?;
 
-            let serializer =
-                serializers
-                    .get(&class_entry.network_name)
-                    .ok_or_else(|| Error::Parse {
-                        context: format!("no serializer for {}", class_entry.network_name),
-                    })?;
+            let serializer = self
+                .serializer_bindings
+                .get(class_id, &class_entry.network_name, serializers)
+                .ok_or_else(|| Error::Parse {
+                    context: format!("no serializer for {}", class_entry.network_name),
+                })?;
 
             // Skip this update
             Entity::skip_update(br, serializer, field_decode_ctx, fp_buf)?;
@@ -1140,14 +1146,14 @@ impl EntityContainer {
         self.changes.clear();
     }
 
-    /// Number of slotted entities (active or dormant).
+    /// Number of slotted entities (active or dormant), in constant time.
     pub fn len(&self) -> usize {
-        self.entities.iter().filter(|slot| slot.is_some()).count()
+        self.occupied_count
     }
 
-    /// Returns `true` when no slot holds an entity.
+    /// Returns `true` when no slot holds an entity, in constant time.
     pub fn is_empty(&self) -> bool {
-        self.entities.iter().all(Option::is_none)
+        self.occupied_count == 0
     }
 }
 

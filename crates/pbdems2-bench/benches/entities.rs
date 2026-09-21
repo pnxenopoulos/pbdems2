@@ -1,6 +1,7 @@
+use std::collections::HashSet;
 use std::hint::black_box;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use pbdems2::entity::field_path::FieldPath;
 use pbdems2::entity::{
     ClassEntry, ClassInfo, ENTITY_HANDLE_INDEX_MASK, EntityContainer, FieldDecodeContext,
@@ -8,8 +9,8 @@ use pbdems2::entity::{
 };
 use pbdems2::position::cell_to_world;
 use pbdems2_bench::{
-    bench_class_info, bool_serializer_container, entity_container, packet_entity_creates,
-    packet_entity_updates, populated_container, serializer_container,
+    BENCH_CLASS, bench_class_info, bool_serializer_container, entity_container,
+    packet_entity_creates, packet_entity_updates, populated_container, serializer_container,
 };
 
 const SLOT_COUNT: usize = 16_384;
@@ -64,10 +65,10 @@ fn entity_container_benchmarks(criterion: &mut Criterion) {
     });
 
     group.bench_function("len_dense", |bencher| {
-        bencher.iter(|| black_box(dense.len()));
+        bencher.iter(|| black_box(black_box(&dense).len()));
     });
     group.bench_function("len_sparse", |bencher| {
-        bencher.iter(|| black_box(sparse.len()));
+        bencher.iter(|| black_box(black_box(&sparse).len()));
     });
 
     group.finish();
@@ -229,12 +230,64 @@ fn packet_entities_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn filtered_entities_benchmarks(criterion: &mut Criterion) {
+    let classes = bench_class_info();
+    let tables = StringTableContainer::new();
+    let mut group = criterion.benchmark_group("filtered_entities");
+    for (count, fields) in [(64, 4), (512, 16), (512, 64)] {
+        let serializers = bool_serializer_container(fields);
+        let creates = packet_entity_creates(count, fields);
+        let updates = packet_entity_updates(count, fields);
+        group.throughput(Throughput::Elements(count as u64));
+        for (name, filter) in [
+            ("keep_all", HashSet::from([BENCH_CLASS])),
+            ("skip_all", HashSet::new()),
+        ] {
+            let mut container = EntityContainer::new();
+            let mut context = FieldDecodeContext::new(1.0 / 64.0);
+            let mut paths = Vec::new();
+            container
+                .handle_packet_entities_filtered(
+                    PacketEntities::new(count as i32, &creates, 0),
+                    &classes,
+                    &serializers,
+                    &tables,
+                    &mut context,
+                    &filter,
+                    &mut paths,
+                )
+                .expect("valid creates");
+            container.clear_tick_changes();
+            assert_eq!(container.len(), if filter.is_empty() { 0 } else { count });
+            group.bench_function(BenchmarkId::new(name, format!("{count}x{fields}")), |b| {
+                b.iter(|| {
+                    container
+                        .handle_packet_entities_filtered(
+                            PacketEntities::new(count as i32, black_box(&updates), 0),
+                            &classes,
+                            &serializers,
+                            &tables,
+                            &mut context,
+                            &filter,
+                            &mut paths,
+                        )
+                        .expect("valid updates");
+                    black_box(container.entity_changes());
+                    container.clear_tick_changes();
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     entity_container_benchmarks,
     entity_field_benchmarks,
     class_and_position_benchmarks,
     handle_mask_benchmark,
-    packet_entities_benchmarks
+    packet_entities_benchmarks,
+    filtered_entities_benchmarks
 );
 criterion_main!(benches);

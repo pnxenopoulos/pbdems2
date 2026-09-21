@@ -62,6 +62,11 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+          if ! grep -Fqx "## v$version" CHANGELOG.md; then
+            echo "CHANGELOG.md is missing the v$version release notes."
+            exit 1
+          fi
+
       - name: Require an unused tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,18 +104,8 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Detect a published baseline
-        id: baseline
-        run: |
-          if curl -fsS -A "pbdems2-release" -o /dev/null "https://crates.io/api/v1/crates/pbdems2"; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "This is the first pbdems2 release; compatibility check is not applicable."
-          fi
-
       - name: Check the public API against crates.io
-        if: steps.baseline.outputs.exists == 'true'
+        # Never treat a registry outage as permission to skip compatibility.
         uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: pbdems2
