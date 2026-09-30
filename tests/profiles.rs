@@ -141,3 +141,23 @@ fn game_defined_type_overrides_are_data_driven() {
     assert!(fields[1].metadata.is_pointer());
     assert!(fields[2].metadata.is_dynamic_serializer_array());
 }
+
+#[test]
+fn fixed8_requires_an_explicit_encoder_in_both_profiles() {
+    for profile in [STRING_PROFILE, SCALAR_PROFILE] {
+        for (var_type, default, fixed) in [
+            ("int8", "I64", "I64Fixed8"),
+            ("uint8", "U64", "U64Fixed8"),
+            ("MoveType_t", "U64", "U64Fixed8"),
+        ] {
+            assert_eq!(
+                decoder_name(profile, var_type, "m_value", None, None),
+                default
+            );
+            assert_eq!(
+                decoder_name(profile, var_type, "m_value", None, Some("fixed8")),
+                fixed
+            );
+        }
+    }
+}

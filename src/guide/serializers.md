@@ -49,7 +49,7 @@ Each flattened field can provide:
 | `bit_count` | Quantized width or angle precision |
 | `low_value`, `high_value` | Quantized numeric range |
 | `encode_flags` | Quantized-float behavior |
-| `var_encoder` | Hint such as `coord`, `normal`, or `qangle_precise` |
+| `var_encoder` | Hint such as `fixed8`, `coord`, `normal`, or `qangle_precise` |
 | `field_serializer_name` | Nested serializer for a composite value |
 | `send_node` | Dotted name prefix |
 | `polymorphic` | Pointer whose concrete serializer is selected on the wire |
@@ -63,6 +63,10 @@ Decoded primitives are stored as [`FieldValue`](crate::entity::FieldValue):
 booleans, signed and unsigned integers, floats, raw byte strings, fixed vectors,
 arbitrary float vectors, and Euler angles. Strings stay as bytes because the
 wire format does not guarantee UTF-8.
+
+The `fixed8` encoder reads one byte per scalar or array element. Signed integer
+types are sign-extended. Fields without this encoder keep their type-based
+encoding, including variable-length integers.
 
 ## Game decode profiles
 
