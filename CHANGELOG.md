@@ -2,6 +2,10 @@
 
 Notable pbdems2 changes live here.
 
+## v0.3.3
+
+- Decode and skip fields with the `fixed8` encoder. Keep the existing encoding for other fields.
+
 ## v0.3.2
 
 - Decode common field-path Huffman operations through a safe prefix table,

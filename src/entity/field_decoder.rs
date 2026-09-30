@@ -142,6 +142,10 @@ pub enum Decoder {
     I64,
     /// Unsigned varint.
     U64,
+    /// Fixed-width signed byte, sign-extended to `i64`.
+    I64Fixed8,
+    /// Fixed-width unsigned byte, extended to `u64`.
+    U64Fixed8,
     /// Fixed-width little-endian `u64`.
     U64Fixed64,
     /// Raw 32-bit float, transmitted bit for bit.
@@ -213,6 +217,14 @@ impl Decoder {
             Decoder::I64 => Ok(FieldValue::I64(br.read_varint64()?)),
 
             Decoder::U64 => Ok(FieldValue::U64(br.read_uvarint64()?)),
+
+            Decoder::I64Fixed8 => {
+                // Exactly eight bits: reinterpret the byte as two's complement.
+                let byte = br.read_bits(8)? as u8;
+                Ok(FieldValue::I64(i64::from(i8::from_le_bytes([byte]))))
+            }
+
+            Decoder::U64Fixed8 => Ok(FieldValue::U64(br.read_bits(8)?)),
 
             Decoder::U64Fixed64 => {
                 let mut buf = [0u8; 8];
@@ -369,6 +381,10 @@ impl Decoder {
 
             Decoder::U64 => {
                 br.skip_varint()?;
+            }
+
+            Decoder::I64Fixed8 | Decoder::U64Fixed8 => {
+                br.skip_bits(8)?;
             }
 
             Decoder::U64Fixed64 => {
@@ -766,6 +782,17 @@ pub fn get_field_metadata(
         return FieldMetadata {
             decoder: Decoder::Bool,
             special: Some(FieldSpecialDescriptor::Pointer),
+        };
+    }
+
+    // Apply the wire encoder to scalar values after resolving array elements.
+    if var_encoder == Some("fixed8") {
+        return FieldMetadata {
+            decoder: match trimmed {
+                "int8" | "int16" | "int32" | "int64" => Decoder::I64Fixed8,
+                _ => Decoder::U64Fixed8,
+            },
+            special: None,
         };
     }
 
@@ -1245,6 +1272,90 @@ mod tests {
         } else {
             panic!("expected String");
         }
+    }
+
+    #[test]
+    fn fixed8_decode_and_skip_preserve_alignment() {
+        use crate::test_utils::BitWriter;
+
+        let mut ctx = FieldDecodeContext::new(1.0 / 64.0);
+        for offset in 0..8 {
+            for byte in 0..=u8::MAX {
+                let mut writer = BitWriter::default();
+                writer.push_bits(0, offset);
+                writer.push_bytes(&[byte, 0xa5]);
+                let bytes = writer.finish();
+                for (decoder, expected) in [
+                    (Decoder::U64Fixed8, FieldValue::U64(u64::from(byte))),
+                    (
+                        Decoder::I64Fixed8,
+                        FieldValue::I64(i64::from(i8::from_le_bytes([byte]))),
+                    ),
+                ] {
+                    let mut reader = BitReader::new(&bytes);
+                    reader.skip_bits(offset).unwrap();
+                    let mut skipped = BitReader::new(&bytes);
+                    skipped.skip_bits(offset).unwrap();
+                    match (decoder.decode(&mut ctx, &mut reader).unwrap(), expected) {
+                        (FieldValue::I64(actual), FieldValue::I64(expected)) => {
+                            assert_eq!(actual, expected)
+                        }
+                        (FieldValue::U64(actual), FieldValue::U64(expected)) => {
+                            assert_eq!(actual, expected)
+                        }
+                        values => panic!("unexpected fixed8 value types: {values:?}"),
+                    }
+                    decoder.skip(&mut ctx, &mut skipped).unwrap();
+                    assert_eq!(reader.position(), offset + 8);
+                    assert_eq!(skipped.position(), reader.position());
+                    assert_eq!(reader.read_bits(8).unwrap(), 0xa5);
+                    assert_eq!(skipped.read_bits(8).unwrap(), 0xa5);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fixed8_rejects_truncated_bytes() {
+        let mut ctx = FieldDecodeContext::new(1.0 / 64.0);
+        for offset in 1..=8 {
+            for decoder in [Decoder::I64Fixed8, Decoder::U64Fixed8] {
+                let mut reader = BitReader::new(&[0xff]);
+                reader.skip_bits(offset).unwrap();
+                let mut skipped = BitReader::new(&[0xff]);
+                skipped.skip_bits(offset).unwrap();
+                assert!(decoder.decode(&mut ctx, &mut reader).is_err());
+                assert!(decoder.skip(&mut ctx, &mut skipped).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn fixed8_arrays_keep_their_length_encoding() {
+        let metadata = |var_type| {
+            meta_full(
+                var_type,
+                "m_values",
+                None,
+                None,
+                None,
+                None,
+                Some("fixed8"),
+                false,
+            )
+        };
+        let fixed = metadata("uint8[4]");
+        assert_eq!(fixed.fixed_array_length(), Some(4));
+        assert!(matches!(fixed.decoder, Decoder::U64Fixed8));
+
+        let dynamic = metadata("CNetworkUtlVectorBase< int8 >");
+        assert!(matches!(dynamic.decoder, Decoder::U64));
+        assert!(matches!(
+            dynamic.special,
+            Some(FieldSpecialDescriptor::DynamicArray {
+                inner_decoder: Decoder::I64Fixed8
+            })
+        ));
     }
 
     // ── FieldMetadata helpers ──
