@@ -32,6 +32,14 @@ pub const CELL_SIZE: f32 = (1u32 << CELL_BITS) as f32;
 /// back to centred world coordinates.
 pub const WORLD_HALF: f32 = 16384.0;
 
+/// Combine a cell index and in-cell offset using an explicit world half-extent.
+///
+/// Use this for Source 2 games or map formats whose cell grid differs from the
+/// default represented by [`WORLD_HALF`].
+pub fn cell_to_world_with_world_half(cell: i32, offset: f32, world_half: f32) -> f32 {
+    (cell as f32) * CELL_SIZE - world_half + offset
+}
+
 /// Combine a cell index and an in-cell offset into a world coordinate.
 ///
 /// Applies the standard Source 2 transform `cell * CELL_SIZE - WORLD_HALF +
@@ -40,7 +48,7 @@ pub const WORLD_HALF: f32 = 16384.0;
 /// [`Entity::world_position`](crate::Entity::world_position) for the typical
 /// entity-side combine that does this for all three axes at once.
 pub fn cell_to_world(cell: i32, offset: f32) -> f32 {
-    (cell as f32) * CELL_SIZE - WORLD_HALF + offset
+    cell_to_world_with_world_half(cell, offset, WORLD_HALF)
 }
 
 #[cfg(test)]
@@ -60,6 +68,12 @@ mod tests {
         // at `32 * 512 - 16384 = 0` and ends just before `+512`.
         assert_eq!(cell_to_world(32, 0.0), 0.0);
         assert_eq!(cell_to_world(32, 256.0), 256.0);
+    }
+
+    #[test]
+    fn explicit_world_half_supports_larger_cell_grids() {
+        assert_eq!(cell_to_world_with_world_half(64, 0.0, 32768.0), 0.0);
+        assert_eq!(cell_to_world_with_world_half(64, 256.0, 32768.0), 256.0);
     }
 
     #[test]

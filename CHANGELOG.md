@@ -2,6 +2,11 @@
 
 Notable pbdems2 changes live here.
 
+## v0.3.4
+
+- Added `cell_to_world_with_world_half` for Source 2 games whose cell grids
+  use a different world extent, while preserving `cell_to_world` behavior.
+
 ## v0.3.3
 
 - Decode and skip fields with the `fixed8` encoder. Keep the existing encoding for other fields.
