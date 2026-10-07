@@ -17,6 +17,10 @@ const SLOT_COUNT: usize = 16_384;
 
 fn entity_container_benchmarks(criterion: &mut Criterion) {
     let dense = entity_container(SLOT_COUNT, 1, 16);
+    let handles: Vec<_> = dense
+        .iter()
+        .map(|(index, entity)| (entity.serial << 14) | index as u32)
+        .collect();
     let sparse = entity_container(SLOT_COUNT, 8, 16);
     let mut group = criterion.benchmark_group("entity_container");
 
@@ -37,8 +41,7 @@ fn entity_container_benchmarks(criterion: &mut Criterion) {
     group.bench_function("handle_lookup_dense", |bencher| {
         bencher.iter(|| {
             let mut checksum = 0_i32;
-            for index in 0..SLOT_COUNT as u32 {
-                let handle = (17 << 14) | index;
+            for &handle in &handles {
                 checksum ^= dense
                     .get_by_handle(black_box(handle))
                     .expect("dense entity exists")
