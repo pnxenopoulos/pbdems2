@@ -57,6 +57,6 @@ pub use limits::DecodeLimits;
 pub use mmap::MappedDemo;
 pub use packet::{PacketMessageFrame, PacketMessageIter};
 pub use playback::{
-    CheckpointAdapter, CommandContext, DemoAdapter, DemoParser, ParserState, PlaybackSegment,
-    PlaybackSession, PreparedPlayback,
+    CheckpointAdapter, CommandContext, DemoAdapter, DemoParser, ParserState, PlaybackCheckpoint,
+    PlaybackSegment, PlaybackSession, PreparedPlayback,
 };

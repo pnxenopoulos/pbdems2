@@ -4,7 +4,9 @@ use std::collections::HashSet;
 
 mod prepared;
 
-pub use prepared::{CheckpointAdapter, PlaybackSegment, PlaybackSession, PreparedPlayback};
+pub use prepared::{
+    CheckpointAdapter, PlaybackCheckpoint, PlaybackSegment, PlaybackSession, PreparedPlayback,
+};
 
 use crate::demo::{CommandFrame, Demo, DemoIndex, command};
 use crate::entity::field_path::FieldPath;
@@ -679,8 +681,26 @@ impl<'a> DemoParser<'a> {
         start: usize,
         end_tick: Option<i32>,
         class_filter: Option<&HashSet<&str>>,
-        mut on_tick: F,
+        on_tick: F,
     ) -> std::result::Result<(), A::Error>
+    where
+        A: DemoAdapter,
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
+    {
+        self.replay_cursor(adapter, state, start, end_tick, class_filter, on_tick)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn replay_cursor<A, F>(
+        &self,
+        adapter: &mut A,
+        state: &mut ParserState,
+        start: usize,
+        end_tick: Option<i32>,
+        class_filter: Option<&HashSet<&str>>,
+        mut on_tick: F,
+    ) -> std::result::Result<usize, A::Error>
     where
         A: DemoAdapter,
         F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
@@ -692,11 +712,13 @@ impl<'a> DemoParser<'a> {
         let mut field_paths = Vec::new();
         let mut last_tick = None;
         let mut emitted_final_tick = false;
+        let mut next_offset = self.demo.data().len();
 
         for frame in commands {
             let frame = frame.map_err(A::Error::from)?;
             let header = frame.header();
-            if end_tick.is_some_and(|end| header.tick > end) && header.cmd != command::STOP {
+            if end_tick.is_some_and(|end| header.tick > end) {
+                next_offset = frame.offset();
                 break;
             }
 
@@ -729,7 +751,7 @@ impl<'a> DemoParser<'a> {
         if !emitted_final_tick && last_tick.is_some_and(|tick| tick >= 0) {
             on_tick(state, adapter)?;
         }
-        Ok(())
+        Ok(next_offset)
     }
 }
 
