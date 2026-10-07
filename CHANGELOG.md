@@ -2,6 +2,10 @@
 
 Notable pbdems2 changes live here.
 
+## v0.3.5
+
+- Fix relative string-table index jumps so updates do not overwrite other entries.
+
 ## v0.3.4
 
 - Added `cell_to_world_with_world_half` for Source 2 games whose cell grids

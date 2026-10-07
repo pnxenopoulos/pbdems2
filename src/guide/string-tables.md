@@ -46,6 +46,7 @@ Within one encoded create/update payload, entry indices and strings are
 delta-compressed:
 
 - sequential entries can encode an implicit next index;
+- other entries encode a jump from the previous index, plus two;
 - a 32-slot circular history stores recent keys;
 - a new key can name a history slot, copy a prefix from it, and append a
   null-terminated suffix; and

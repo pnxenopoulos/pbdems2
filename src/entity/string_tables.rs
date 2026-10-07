@@ -225,11 +225,11 @@ impl StringTable {
         let mut user_data_uncompressed_buf = Vec::new();
 
         for _ in 0..entry_count {
-            // Read index
-            entry_index = if br.read_bool()? {
-                entry_index + 1
+            // Index jumps are relative to the previous entry, starting at -1.
+            entry_index += if br.read_bool()? {
+                1
             } else {
-                i64::from(br.read_uvarint32()?) + 1
+                i64::from(br.read_uvarint32()?) + 2
             };
             let idx = usize::try_from(entry_index).map_err(|_| Error::Parse {
                 context: format!("negative string-table entry index {entry_index}"),

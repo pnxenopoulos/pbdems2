@@ -165,7 +165,7 @@ fn updates_existing_entries_without_clearing_omitted_fields() {
 }
 
 #[test]
-fn explicit_indices_create_gaps() {
+fn initial_index_jump_creates_gaps() {
     let mut writer = BitWriter::default();
     writer.push_bool(false);
     writer.push_uvarint32(1);
@@ -185,6 +185,52 @@ fn explicit_indices_create_gaps() {
     assert!(table.get(1).unwrap().string.is_none());
     assert_eq!(table.get(2).unwrap().string.as_deref(), Some("third"));
     assert_eq!(table.dirty_indices(), &[2]);
+}
+
+#[test]
+fn relative_index_jumps_preserve_sparse_entries_on_create_and_update() {
+    let mut container = StringTableContainer::new();
+    for generation in 0..2 {
+        let mut writer = BitWriter::default();
+        for (value, jump) in [Some(1), None, Some(0), Some(0), Some(128)]
+            .into_iter()
+            .enumerate()
+        {
+            writer.push_bool(jump.is_none());
+            if let Some(jump) = jump {
+                writer.push_uvarint32(jump);
+            }
+            writer.push_bool(false); // No key update.
+            writer.push_bool(true);
+            writer.push_bits(1, MAX_USERDATA_BITS);
+            writer.push_bytes(&[generation * 10 + value as u8]);
+        }
+        let data = writer.finish();
+        if generation == 0 {
+            container
+                .handle_create(CreateStringTable::new("events", 5, data))
+                .unwrap();
+        } else {
+            container.clear_dirty();
+            container
+                .handle_update(UpdateStringTable::new(0, 5, data))
+                .unwrap();
+        }
+
+        let table = container.find_table("events").unwrap();
+        // Each jump is relative to the previous index, starting at -1.
+        assert_eq!(table.dirty_indices(), &[2, 3, 5, 7, 137]);
+        assert_eq!(table.entries().len(), 138);
+        for (value, index) in [2, 3, 5, 7, 137].into_iter().enumerate() {
+            assert_eq!(
+                table.get(index).unwrap().user_data.as_deref(),
+                Some([generation * 10 + value as u8].as_slice())
+            );
+        }
+        for index in [0, 1, 4, 6, 136] {
+            assert!(table.get(index).unwrap().user_data.is_none());
+        }
+    }
 }
 
 #[test]
