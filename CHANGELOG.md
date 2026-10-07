@@ -2,7 +2,7 @@
 
 Notable pbdems2 changes live here.
 
-## Unreleased
+## v0.3.6
 
 - Add exact completed-tick checkpoints with validated replay continuation.
 - Respect tick boundaries before `DEM_Stop`.
