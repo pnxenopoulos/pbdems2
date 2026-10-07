@@ -93,3 +93,13 @@ and table lookup through
 
 See [Entities and class information](crate::guide::entities) for how class IDs,
 serializers, baselines, and entity deltas meet during creation.
+
+For event tables, enable `CreateStringTable::with_change_tracking()` and read
+`StringTable::changes()`. Each write retains its payload and order, even when
+several writes use one slot in one tick. Omitted fields remain absent in the
+change; `entries()` keeps the merged current state.
+
+`StringTableChangeKind::Delta` identifies create/update writes.
+`StringTableChangeKind::Snapshot` identifies full-packet state. A snapshot is
+not a new event. `clear_dirty()` clears both indices and retained changes.
+Tracking is off by default to avoid payload copies for lookup-only consumers.

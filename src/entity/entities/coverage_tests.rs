@@ -376,10 +376,7 @@ fn validates_entity_and_container_indices_and_tracks_replacements() {
     let second = Entity::new(2, 2, "Second".into());
     let replaced = container.insert(second).unwrap().expect("previous entity");
     assert_eq!(&*replaced.class_name, "First");
-    assert_eq!(
-        &*container.get_by_handle((9 << 14) | 2).unwrap().class_name,
-        "Second"
-    );
+    assert_eq!(&*container.get_by_handle(2).unwrap().class_name, "Second");
     assert_eq!(container.updated_indices(), &[2, 2]);
     assert_eq!(
         container
@@ -828,4 +825,27 @@ fn create_errors_identify_unknown_classes_serializers_and_fields() {
     assert!(
         matches!(field_error, Error::Parse { context } if context.contains("field path out of range"))
     );
+}
+
+#[test]
+fn full_handles_reject_stale_serials_and_invalid_sentinels() {
+    let mut entities = EntityContainer::new();
+    let mut entity = Entity::new(2, 1, "Pawn".into());
+    entity.serial = 9;
+    entity.active = false; // Dormancy is not deletion.
+    entities.insert(entity).unwrap();
+    assert!(entities.get_by_handle((9 << 14) | 2).is_some());
+    assert!(entities.get_by_handle((10 << 14) | 2).is_none());
+    assert!(entities.get_by_handle((9 << 14) | 3).is_none());
+    let mut replacement = Entity::new(2, 1, "Pawn".into());
+    replacement.serial = 10;
+    entities.insert(replacement).unwrap();
+    assert!(entities.get_by_handle((9 << 14) | 2).is_none());
+    assert!(entities.get_by_handle((10 << 14) | 2).is_some());
+    for handle in [INVALID_ENTITY_HANDLE, u32::MAX] {
+        let mut entity = Entity::new((handle & ENTITY_HANDLE_INDEX_MASK) as i32, 1, "Pawn".into());
+        entity.serial = handle >> 14;
+        entities.insert(entity).unwrap();
+        assert!(entities.get_by_handle(handle).is_none());
+    }
 }

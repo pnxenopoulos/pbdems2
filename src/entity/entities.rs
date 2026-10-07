@@ -1092,13 +1092,17 @@ impl EntityContainer {
             .and_then(Option::as_ref)
     }
 
-    /// Resolve a networked `CHandle` to the entity it refers to, if still active.
+    /// Resolve a networked `CHandle`, checking both index and serial number.
     ///
-    /// Applies [`ENTITY_HANDLE_INDEX_MASK`] to recover the entity index, then
-    /// looks it up. This is the canonical way to follow a handle field such as
-    /// `m_hPawn`; decoding the mask by hand risks resolving the wrong entity.
+    /// Returns `None` for invalid handles, empty slots, and reused slots. Dormant
+    /// entities remain accessible; check [`Entity::active`] for PVS visibility.
+    /// Game-event handles can use a different layout and must be converted first.
     pub fn get_by_handle(&self, handle: u32) -> Option<&Entity> {
+        if handle == INVALID_ENTITY_HANDLE || handle == u32::MAX {
+            return None;
+        }
         self.get((handle & ENTITY_HANDLE_INDEX_MASK) as i32)
+            .filter(|entity| entity.serial == handle >> MAX_EDICT_BITS)
     }
 
     /// Iterate over all slotted entities as `(index, entity)` pairs. Includes

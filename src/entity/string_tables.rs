@@ -43,6 +43,8 @@ pub struct CreateStringTable {
     pub data_compressed: bool,
     /// Whether user-data sizes use varint bit counts rather than a fixed width.
     pub using_varint_bitcounts: bool,
+    /// Retain ordered delta payloads until the next tick callback completes.
+    pub track_changes: bool,
 }
 
 impl CreateStringTable {
@@ -58,7 +60,16 @@ impl CreateStringTable {
             string_data,
             data_compressed: false,
             using_varint_bitcounts: false,
+            track_changes: false,
         }
+    }
+
+    /// Retain ordered changes for tables used as event streams.
+    /// Disabled by default to avoid copying payloads for ordinary lookup tables.
+    #[must_use]
+    pub const fn with_change_tracking(mut self) -> Self {
+        self.track_changes = true;
+        self
     }
 
     /// Configure fixed-width per-entry user data.
@@ -132,6 +143,27 @@ impl StringTableEntry {
     }
 }
 
+/// Origin of a string-table write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringTableChangeKind {
+    /// A create or update message; fields omitted by the wire stay absent.
+    Delta,
+    /// A full-packet snapshot, not a new event.
+    Snapshot,
+}
+
+/// One ordered write, retained independently of later writes to the same slot.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct StringTableChange {
+    /// Slot written by this change.
+    pub index: usize,
+    /// Incremental delta or full-packet snapshot.
+    pub kind: StringTableChangeKind,
+    /// Fields supplied by this write, before later writes or field merging.
+    pub entry: StringTableEntry,
+}
+
 /// A string table.
 #[derive(Debug, Clone)]
 pub struct StringTable {
@@ -148,6 +180,8 @@ pub struct StringTable {
     /// [`StringTable::dirty_indices`]. May contain duplicates if an index is
     /// touched more than once between callbacks.
     dirty: Vec<usize>,
+    track_changes: bool,
+    changes: Vec<StringTableChange>,
 }
 
 impl StringTable {
@@ -168,6 +202,8 @@ impl StringTable {
             using_varint_bitcounts,
             entries: Vec::new(),
             dirty: Vec::new(),
+            track_changes: false,
+            changes: Vec::new(),
         }
     }
 
@@ -194,6 +230,28 @@ impl StringTable {
     /// [`StringTableContainer::clear_dirty`]. Indices may repeat.
     pub fn dirty_indices(&self) -> &[usize] {
         &self.dirty
+    }
+
+    /// Ordered writes since the previous callback, including repeated slots.
+    /// Enable with [`CreateStringTable::with_change_tracking`]. Snapshot writes
+    /// are marked separately. [`StringTableContainer::clear_dirty`] clears these.
+    pub fn changes(&self) -> &[StringTableChange] {
+        &self.changes
+    }
+
+    fn record_change(
+        &mut self,
+        index: usize,
+        kind: StringTableChangeKind,
+        entry: &StringTableEntry,
+    ) {
+        if self.track_changes {
+            self.changes.push(StringTableChange {
+                index,
+                kind,
+                entry: entry.clone(),
+            });
+        }
     }
 
     /// Parse a string table update from a bit reader.
@@ -358,6 +416,9 @@ impl StringTable {
                 None
             };
 
+            let entry = StringTableEntry::new(string, user_data);
+            self.record_change(idx, StringTableChangeKind::Delta, &entry);
+            let StringTableEntry { string, user_data } = entry;
             if idx < self.entries.len() {
                 if let Some(ud) = user_data {
                     self.entries[idx].user_data = Some(ud);
@@ -421,6 +482,8 @@ impl StringTableContainer {
             msg.flags,
             msg.using_varint_bitcounts,
         );
+
+        table.track_changes = msg.track_changes;
 
         let string_data = if msg.data_compressed {
             let decompressed_len = snap::raw::decompress_len(&msg.string_data)
@@ -514,6 +577,7 @@ impl StringTableContainer {
                 continue;
             };
             for (index, entry) in items.into_iter().enumerate() {
+                table.record_change(index, StringTableChangeKind::Snapshot, &entry);
                 if index < table.entries.len() {
                     if entry.user_data.is_some() {
                         table.entries[index].user_data = entry.user_data;
@@ -540,6 +604,7 @@ impl StringTableContainer {
     pub fn clear_dirty(&mut self) {
         for table in &mut self.tables {
             table.dirty.clear();
+            table.changes.clear();
         }
     }
 
@@ -624,6 +689,7 @@ mod tests {
                 string_data: Vec::new(),
                 data_compressed: false,
                 using_varint_bitcounts: false,
+                track_changes: false,
             })
             .unwrap();
         assert!(container.find_table("test").is_some());

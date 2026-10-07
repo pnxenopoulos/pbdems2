@@ -33,6 +33,6 @@ pub use serializers::{
     SerializerContainer, SerializerField, parse_type,
 };
 pub use string_tables::{
-    CreateStringTable, INSTANCE_BASELINE_TABLE_NAME, StringTable, StringTableContainer,
-    StringTableEntry, UpdateStringTable,
+    CreateStringTable, INSTANCE_BASELINE_TABLE_NAME, StringTable, StringTableChange,
+    StringTableChangeKind, StringTableContainer, StringTableEntry, UpdateStringTable,
 };

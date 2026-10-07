@@ -5,6 +5,8 @@ Notable pbdems2 changes live here.
 ## v0.3.5
 
 - Fix relative string-table index jumps so updates do not overwrite other entries.
+- Validate full entity handles in `get_by_handle` to reject reused slots.
+- Add optional ordered string-table change records. Identify snapshots separately.
 
 ## v0.3.4
 

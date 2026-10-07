@@ -49,6 +49,7 @@ fn parses_raw_and_history_strings_with_variable_user_data() {
     assert_eq!(table.get(1).unwrap().string.as_deref(), Some("alpine"));
     assert!(table.get(1).unwrap().user_data.is_none());
     assert_eq!(table.dirty_indices(), &[0, 1]);
+    assert!(table.changes().is_empty());
     assert!(table.get(2).is_none());
 }
 
@@ -411,4 +412,50 @@ fn rejects_invalid_inner_compression_and_user_data_limit() {
             actual: 2
         }
     ));
+}
+
+#[test]
+fn ordered_changes_keep_each_write_and_distinguish_snapshots() {
+    let mut container = StringTableContainer::new();
+    container
+        .handle_create(CreateStringTable::new("events", 0, vec![]).with_change_tracking())
+        .unwrap();
+    for (key, data) in [
+        (Some("apply"), Some(&[1][..])),
+        (None, Some(&[2][..])),
+        (Some("remove"), None),
+    ] {
+        let mut writer = BitWriter::default();
+        push_raw_entry(&mut writer, key, data);
+        container
+            .handle_update(UpdateStringTable::new(0, 1, writer.finish()))
+            .unwrap();
+    }
+    let table = container.find_table("events").unwrap();
+    assert_eq!(table.dirty_indices(), &[0, 0, 0]);
+    let changes = table.changes();
+    assert_eq!(changes.len(), 3);
+    assert_eq!(changes[0].entry.string.as_deref(), Some("apply"));
+    assert_eq!(changes[0].entry.user_data.as_deref(), Some(&[1][..]));
+    assert_eq!(changes[1].entry.user_data.as_deref(), Some(&[2][..]));
+    assert!(changes[1].entry.string.is_none());
+    assert!(changes[2].entry.user_data.is_none());
+    assert_eq!(table.get(0).unwrap().user_data.as_deref(), Some(&[2][..]));
+    let saved = container.clone();
+    container
+        .do_full_update([(
+            "events".into(),
+            vec![StringTableEntry::new(None, Some(vec![3]))],
+        )])
+        .unwrap();
+    assert_eq!(
+        container.find_table("events").unwrap().changes()[3].kind,
+        StringTableChangeKind::Snapshot
+    );
+    assert_eq!(saved.find_table("events").unwrap().changes().len(), 3);
+    container.clear_dirty();
+    let table = container.find_table("events").unwrap();
+    assert!(table.changes().is_empty());
+    assert!(table.dirty_indices().is_empty());
+    assert_eq!(table.get(0).unwrap().user_data.as_deref(), Some(&[3][..]));
 }

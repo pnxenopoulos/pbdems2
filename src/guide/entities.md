@@ -110,6 +110,7 @@ array index in its low **14 bits**:
 
 ```text
 entity_index = handle & 0x3FFF
+serial = handle >> 14
 ```
 
 [`ENTITY_HANDLE_INDEX_MASK`](crate::entity::ENTITY_HANDLE_INDEX_MASK) owns this
@@ -119,10 +120,13 @@ handle with an odd serial to the wrong slot.
 For a handle stored in an entity field, use
 [`Entity::get_handle`](crate::Entity::get_handle) followed by
 [`EntityContainer::get_by_handle`](crate::entity::EntityContainer::get_by_handle).
-For optional protobuf handle fields, use
-[`protobuf_handle_index`](crate::entity::protobuf_handle_index), which also
-rejects the [`INVALID_ENTITY_HANDLE`](crate::entity::INVALID_ENTITY_HANDLE)
-sentinel.
+The lookup checks the serial and rejects invalid handles and reused slots.
+Dormant entities remain available. Check `Entity::active` for visibility.
+
+For optional protobuf handles, call `get_by_handle` after checking field presence.
+[`protobuf_handle_index`](crate::entity::protobuf_handle_index) extracts only the
+slot; it does not validate the occupant. Game-event handles can use a different
+layout. Convert them before calling `get_by_handle`.
 
 ## Reading fields
 
