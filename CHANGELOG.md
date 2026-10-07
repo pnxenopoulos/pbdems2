@@ -2,6 +2,11 @@
 
 Notable pbdems2 changes live here.
 
+## Unreleased
+
+- Add exact completed-tick checkpoints with validated replay continuation.
+- Respect tick boundaries before `DEM_Stop`.
+
 ## v0.3.5
 
 - Fix relative string-table index jumps so updates do not overwrite other entries.

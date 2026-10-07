@@ -8,19 +8,19 @@ use crate::limits::DecodeLimits;
 
 use super::{DemoAdapter, DemoParser, ParserState, segment_replay_end_tick};
 
-/// A game adapter that can save semantic signon state and restore a fresh run.
+/// A game adapter that can save semantic state and restore a fresh run.
 ///
 /// Checkpoints should omit transient allocations such as packet scratch
 /// buffers and per-tick output. This lets one prepared playback seed create
 /// inexpensive, isolated sessions for repeated or parallel decoding.
 pub trait CheckpointAdapter: DemoAdapter + Sized {
-    /// Semantic adapter state required to continue immediately after signon.
+    /// Semantic adapter state and configuration required to continue playback.
     type Checkpoint;
 
-    /// Capture the adapter state at the end of signon.
+    /// Capture the adapter state after signon or a completed gameplay tick.
     fn checkpoint(&self) -> Self::Checkpoint;
 
-    /// Construct an independent adapter from a signon checkpoint.
+    /// Construct an independent adapter from a checkpoint.
     fn from_checkpoint(checkpoint: &Self::Checkpoint) -> Self;
 }
 
@@ -155,7 +155,108 @@ pub struct PlaybackSession<'demo, 'prepared, A: CheckpointAdapter> {
     adapter: A,
 }
 
+/// Exact completed-tick state, next command cursor, and adapter configuration.
+///
+/// Unlike a full-packet seek, continuation preserves all prior packet deltas.
+/// The demo allocation, decode limits, and entity filter cannot change.
+pub struct PlaybackCheckpoint<A: CheckpointAdapter> {
+    state: ParserState,
+    adapter_checkpoint: A::Checkpoint,
+    next_offset: usize,
+    identity: DemoIdentity,
+    classes: HashSet<String>,
+}
+
+impl<A: CheckpointAdapter> PlaybackCheckpoint<A> {
+    /// State at the last completed tick, without per-tick change records.
+    pub const fn state(&self) -> &ParserState {
+        &self.state
+    }
+
+    /// Continue through an inclusive tick using the original entity filter.
+    /// The checkpoint remains reusable for independent continuations.
+    pub fn replay_through<F>(
+        &self,
+        parser: DemoParser<'_>,
+        target_tick: i32,
+        on_tick: F,
+    ) -> std::result::Result<Self, A::Error>
+    where
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
+    {
+        if !self.identity.matches(&parser) || target_tick < self.state.tick() {
+            return Err(A::Error::from(Error::Parse {
+                context: "checkpoint requires the original demo and a nondecreasing tick".into(),
+            }));
+        }
+        let classes = self.classes.iter().map(String::as_str).collect();
+        Self::capture(
+            parser,
+            self.state.clone(),
+            A::from_checkpoint(&self.adapter_checkpoint),
+            self.next_offset,
+            target_tick,
+            &classes,
+            on_tick,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn capture<F>(
+        parser: DemoParser<'_>,
+        mut state: ParserState,
+        mut adapter: A,
+        start: usize,
+        target_tick: i32,
+        classes: &HashSet<&str>,
+        on_tick: F,
+    ) -> std::result::Result<Self, A::Error>
+    where
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
+    {
+        let next_offset = parser.replay_cursor(
+            &mut adapter,
+            &mut state,
+            start,
+            Some(target_tick),
+            Some(classes),
+            on_tick,
+        )?;
+        state.clear_tick_changes();
+        Ok(Self {
+            state,
+            adapter_checkpoint: adapter.checkpoint(),
+            next_offset,
+            identity: DemoIdentity::new(&parser),
+            classes: classes.iter().map(|name| (*name).to_owned()).collect(),
+        })
+    }
+}
+
 impl<'demo, A: CheckpointAdapter> PlaybackSession<'demo, '_, A> {
+    /// Replay packet deltas from signon and capture an exact inclusive tick.
+    pub fn checkpoint_through<F>(
+        self,
+        target_tick: i32,
+        classes: &HashSet<&str>,
+        on_tick: F,
+    ) -> std::result::Result<PlaybackCheckpoint<A>, A::Error>
+    where
+        F: FnMut(&ParserState, &mut A) -> std::result::Result<(), A::Error>,
+    {
+        PlaybackCheckpoint::capture(
+            self.parser,
+            self.state,
+            self.adapter,
+            self.prepared
+                .index
+                .stream_start()
+                .unwrap_or(self.parser.demo.data().len()),
+            target_tick,
+            classes,
+            on_tick,
+        )
+    }
     /// Initial session state before playback begins.
     pub const fn state(&self) -> &ParserState {
         &self.state
@@ -517,6 +618,75 @@ mod tests {
         push_command(&mut bytes, command::PACKET, 3);
         push_command(&mut bytes, command::STOP, 4);
         bytes
+    }
+
+    #[test]
+    fn exact_checkpoints_resume_only_after_completed_ticks() {
+        let mut bytes = fixture();
+        // Two commands at tick 2 must be captured together.
+        bytes.splice(
+            HEADER_SIZE + 6 * 3..HEADER_SIZE + 6 * 3,
+            [command::PACKET as u8, 2, 0],
+        );
+        let parser = DemoParser::new(&bytes).unwrap();
+        let prepared = parser
+            .prepare(StatefulAdapter::default(), 1.0 / 30.0)
+            .unwrap();
+        let filter = HashSet::from(["CTest"]);
+        let mut first = Vec::new();
+        let checkpoint = prepared
+            .session(parser)
+            .unwrap()
+            .checkpoint_through(2, &filter, |state, adapter| {
+                first.push((state.tick(), adapter.tick_messages.clone()));
+                adapter.tick_messages.clear();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(first, [(1, vec![1]), (2, vec![2, 2])]);
+        assert_eq!(checkpoint.state().tick(), 2);
+        for _ in 0..2 {
+            let mut resumed = Vec::new();
+            let next = checkpoint
+                .replay_through(parser, 3, |state, adapter| {
+                    resumed.push((state.tick(), adapter.tick_messages.clone()));
+                    adapter.tick_messages.clear();
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(resumed, [(3, vec![3])]);
+            assert_eq!(next.state().tick(), 3);
+            let mut final_ticks = Vec::new();
+            next.replay_through(parser, 4, |state, _| {
+                final_ticks.push(state.tick());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(final_ticks, [4]);
+        }
+        let other = bytes.clone();
+        assert!(
+            checkpoint
+                .replay_through(DemoParser::new(&other).unwrap(), 3, |_, _| Ok(()))
+                .is_err()
+        );
+        assert!(checkpoint.replay_through(parser, 1, |_, _| Ok(())).is_err());
+        let limits = DecodeLimits::default().with_max_command_body_bytes(1024);
+        assert!(
+            checkpoint
+                .replay_through(
+                    DemoParser::with_limits(&bytes, limits).unwrap(),
+                    3,
+                    |_, _| Ok(())
+                )
+                .is_err()
+        );
+        let same = checkpoint
+            .replay_through(parser, 2, |_, _| {
+                panic!("must not re-emit a completed tick")
+            })
+            .unwrap();
+        assert_eq!(same.state().tick(), 2);
     }
 
     fn segmented_fixture() -> Vec<u8> {
