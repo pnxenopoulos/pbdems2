@@ -92,6 +92,16 @@ fn decode_cases() -> Vec<DecodeCase> {
             data: vector,
         },
         DecodeCase {
+            name: "vector3_coord",
+            serializers: serializer_for("Vector", None, None, None, Some("coord")),
+            data: vec![0xff; 9],
+        },
+        DecodeCase {
+            name: "vector3_quantized_12_bit",
+            serializers: serializer_for("Vector", Some(12), Some(0.0), Some(100.0), None),
+            data: vec![0x5a; 5],
+        },
+        DecodeCase {
             name: "qangle_12_bit",
             serializers: serializer_for("QAngle", Some(12), None, None, None),
             data: vec![0x5a; 5],

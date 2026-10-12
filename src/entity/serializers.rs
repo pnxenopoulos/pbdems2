@@ -263,9 +263,9 @@ impl Serializer {
             // If we've consumed all parts, this is the field
             if consumed == parts.len() {
                 let mut fp = FieldPath::default();
-                fp.data[0] = field_idx as u8;
+                fp.data[0] = i16::try_from(field_idx).ok()?;
                 // last stays 0
-                return Some(fp.pack());
+                return fp.try_pack();
             }
 
             // More parts remain — we need to recurse into a sub-serializer
@@ -282,10 +282,10 @@ impl Serializer {
                     if after_idx == parts.len() {
                         // The array element itself is the value
                         let mut fp = FieldPath::default();
-                        fp.data[0] = field_idx as u8;
-                        fp.data[1] = array_idx as u8;
+                        fp.data[0] = i16::try_from(field_idx).ok()?;
+                        fp.data[1] = i16::try_from(array_idx).ok()?;
                         fp.last = 1;
-                        return Some(fp.pack());
+                        return fp.try_pack();
                     }
 
                     // Recurse into the inner field's serializer
@@ -294,13 +294,13 @@ impl Serializer {
                     {
                         let inner_fp = FieldPath::unpack(key);
                         let mut fp = FieldPath::default();
-                        fp.data[0] = field_idx as u8;
-                        fp.data[1] = array_idx as u8;
+                        fp.data[0] = i16::try_from(field_idx).ok()?;
+                        fp.data[1] = i16::try_from(array_idx).ok()?;
                         fp.last = 2 + inner_fp.last;
                         fp.data
                             .get_mut(2..=fp.last)?
                             .copy_from_slice(&inner_fp.data[..=inner_fp.last]);
-                        return Some(fp.pack());
+                        return fp.try_pack();
                     }
                 }
                 continue;
@@ -312,12 +312,12 @@ impl Serializer {
             {
                 let inner_fp = FieldPath::unpack(key);
                 let mut fp = FieldPath::default();
-                fp.data[0] = field_idx as u8;
+                fp.data[0] = i16::try_from(field_idx).ok()?;
                 fp.last = 1 + inner_fp.last;
                 fp.data
                     .get_mut(1..=fp.last)?
                     .copy_from_slice(&inner_fp.data[..=inner_fp.last]);
-                return Some(fp.pack());
+                return fp.try_pack();
             }
         }
 
@@ -330,11 +330,11 @@ impl Serializer {
         let fp = FieldPath::unpack(key);
         let indices = fp.data.get(..=fp.last)?;
         let mut name = String::new();
-        let mut field = self.fields.get(usize::from(indices[0]))?;
+        let mut field = self.fields.get(indices[0] as usize)?;
         append_field_name(&mut name, field);
 
         for &index in &indices[1..] {
-            let idx = usize::from(index);
+            let idx = index as usize;
             if field.is_dynamic_array() {
                 write!(name, ".{idx}").expect("formatting an integer into a String cannot fail");
                 if let Some(ref fs) = field.field_serializer {
@@ -973,7 +973,7 @@ mod tests {
                 components(name, node.as_deref()) == query_parts
             }).map(|index| {
                 let mut path = FieldPath::default();
-                path.data[0] = index as u8;
+                path.data[0] = index as i16;
                 path.pack()
             });
             let serializer = Serializer {
@@ -1125,9 +1125,14 @@ mod tests {
                 last,
                 finished: false,
             }
-            .pack();
-            assert_eq!(serializer.field_name_for_key(key), None);
+            .try_pack();
+            if let Some(key) = key {
+                assert_eq!(serializer.field_name_for_key(key), None);
+            } else {
+                assert!(last >= 7);
+            }
         }
+        assert!(serializer.field_name_for_key(7_u64 << 61).is_none());
     }
 
     #[test]
@@ -1196,12 +1201,7 @@ mod tests {
             };
             path.insert_str(0, "child.");
         }
-        let invalid_key = FieldPath {
-            data: [0; 7],
-            last: 7,
-            finished: false,
-        }
-        .pack();
+        let invalid_key = 7_u64 << 61;
         assert_eq!(serializer.field_name_for_key(invalid_key), None);
     }
 }

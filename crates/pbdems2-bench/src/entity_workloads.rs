@@ -227,10 +227,10 @@ mod tests {
                 let mut path = FieldPath::default();
                 if workload.nested {
                     path.data[0] = 0;
-                    path.data[1] = field as u8;
+                    path.data[1] = field as i16;
                     path.last = 1;
                 } else {
-                    path.data[0] = field as u8;
+                    path.data[0] = field as i16;
                 }
                 let key = Some(path.pack());
                 match field % 6 {

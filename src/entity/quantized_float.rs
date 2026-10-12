@@ -121,7 +121,7 @@ impl QuantizedFloat {
         };
 
         qf.encode_flags = compute_encode_flags(qf.encode_flags, qf.low_value, qf.high_value);
-        let mut steps = 1i32 << qf.bit_count;
+        let mut steps = 1_u32 << qf.bit_count;
 
         let range = qf.high_value - qf.low_value;
         let offset = range / steps as f32;
@@ -133,7 +133,7 @@ impl QuantizedFloat {
 
         if qf.encode_flags & QFE_ENCODE_INTEGERS_EXACTLY != 0 {
             let delta = (qf.low_value as i32 - qf.high_value as i32).max(1);
-            let int_range = 1 << num_bits_for_count(delta);
+            let int_range = 1_u32 << num_bits_for_count(delta);
 
             let mut bc = qf.bit_count;
             while (1 << bc) < int_range {
@@ -256,8 +256,13 @@ mod tests {
     // ── Construction + decode ──
 
     #[test]
-    fn new_does_not_panic() {
-        let _qf = QuantizedFloat::new(8, 0, 0.0, 255.0).unwrap();
+    fn thirty_one_bit_precision_decodes_endpoints() {
+        let qf = QuantizedFloat::new(31, 0, 0.0, 100.0).unwrap();
+        for (bytes, expected) in [([0; 4], 0.0), ([0xff; 4], 100.0)] {
+            let mut reader = BitReader::new(&bytes);
+            assert_eq!(qf.decode(&mut reader).unwrap(), expected);
+            assert_eq!(reader.position(), 31);
+        }
     }
 
     #[test]

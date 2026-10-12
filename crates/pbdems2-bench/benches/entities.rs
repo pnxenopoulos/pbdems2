@@ -9,8 +9,9 @@ use pbdems2::entity::{
 };
 use pbdems2::position::cell_to_world;
 use pbdems2_bench::{
-    BENCH_CLASS, bench_class_info, bool_serializer_container, entity_container,
-    packet_entity_creates, packet_entity_updates, populated_container, serializer_container,
+    BENCH_CLASS, bench_class_info, bool_instance_baseline, bool_serializer_container,
+    entity_container, packet_entity_creates, packet_entity_updates, populated_container,
+    serializer_container,
 };
 
 const SLOT_COUNT: usize = 16_384;
@@ -233,6 +234,34 @@ fn packet_entities_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn baseline_benchmarks(criterion: &mut Criterion) {
+    let classes = bench_class_info();
+    let creates = packet_entity_creates(512, 1);
+    let mut group = criterion.benchmark_group("class_baselines");
+    group.throughput(Throughput::Elements(512));
+    for fields in [16, 64, 128] {
+        let serializers = bool_serializer_container(fields);
+        let tables = bool_instance_baseline(fields);
+        group.bench_function(BenchmarkId::new("create_512", fields), |b| {
+            b.iter(|| {
+                let mut entities = EntityContainer::new();
+                entities
+                    .handle_packet_entities(
+                        PacketEntities::new(512, black_box(&creates), 0),
+                        &classes,
+                        &serializers,
+                        &tables,
+                        &mut FieldDecodeContext::new(1.0 / 64.0),
+                        &mut Vec::new(),
+                    )
+                    .expect("baseline-backed creates decode");
+                black_box(entities);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn filtered_entities_benchmarks(criterion: &mut Criterion) {
     let classes = bench_class_info();
     let tables = StringTableContainer::new();
@@ -291,6 +320,7 @@ criterion_group!(
     class_and_position_benchmarks,
     handle_mask_benchmark,
     packet_entities_benchmarks,
-    filtered_entities_benchmarks
+    filtered_entities_benchmarks,
+    baseline_benchmarks
 );
 criterion_main!(benches);

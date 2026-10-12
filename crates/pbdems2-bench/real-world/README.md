@@ -142,6 +142,18 @@ The runner defaults Polars and Rayon to four threads and parser segments to one.
 control with a counting callback. Its filters and timing boundary differ from
 the dataset APIs, so subtracting its time doesn't isolate callback cost.
 
+## Compare parser state workloads
+
+Use the [matched parsing control](PARSING.md) to compare preloaded input bytes,
+entity classes, and string-table updates. It checks sampled state before timing.
+Keep these results separate from Python dataset and stat-query timings.
+
+## Allocator comparison
+
+The decode control has an optional `mimalloc` feature. It selects the allocator
+for that executable only. The parser library keeps the caller's allocator.
+See [allocator and reader results](ALLOCATOR_READER.md) for measurements and commands.
+
 ## Snapshot output benchmark
 
 The private `awpy-output-bench` package compares the original 38-column row-scan
@@ -224,3 +236,10 @@ python3 -m unittest discover -s crates/pbdems2-bench/real-world -p 'test_*.py'
 cargo fmt --manifest-path crates/pbdems2-bench/real-world/Cargo.toml \
   -p real-world-control -p awpy-output-bench -p pbdems2-allocation-probe --check
 ```
+
+
+### Core version selection
+
+The local patch uses pbdems2 0.4. A sibling that still requires 0.3 keeps its
+registry dependency. Check both adapters' dependency versions before a core
+comparison. Use an isolated manifest copy to test a sibling's 0.4 migration.

@@ -87,9 +87,11 @@ proptest! {
 
     #[test]
     fn packed_field_paths_round_trip(
-        data in any::<[u8; 7]>(),
+        raw_data in any::<[u16; 7]>(),
         last in 0_usize..7,
     ) {
+        let masks = [2047, 4095, 2047, 255, 127, 15, 15];
+        let data = std::array::from_fn(|i| (raw_data[i] & masks[i]) as i16);
         let original = FieldPath { data, last, finished: false };
         let unpacked = FieldPath::unpack(original.pack());
 

@@ -72,7 +72,14 @@ pub fn validate(records: &[PathRecord]) {
         assert_eq!(reader.position(), record.offset + record.bits);
         assert_eq!(paths.len(), record.fields);
         let digest = paths.iter().fold(0u64, |value, path: &FieldPath| {
-            value.rotate_left(7) ^ path.pack()
+            let mut legacy = [0u8; 8];
+            for (output, component) in legacy[..7].iter_mut().zip(path.data) {
+                // Historical digests used byte components; retain that digest
+                // format while the decoder now preserves the full component.
+                *output = component as u8;
+            }
+            legacy[7] = path.last as u8;
+            value.rotate_left(7) ^ u64::from_le_bytes(legacy)
         });
         assert_eq!(digest, record.digest);
     }

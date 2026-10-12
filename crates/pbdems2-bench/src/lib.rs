@@ -76,7 +76,7 @@ pub fn entity(index: i32, field_count: usize) -> Entity {
     let mut fields = rustc_hash::FxHashMap::default();
     for field_index in 0..field_count {
         let key = FieldPath {
-            data: [field_index as u8, 0, 0, 0, 0, 0, 0],
+            data: [field_index as i16, 0, 0, 0, 0, 0, 0],
             last: 0,
             finished: false,
         }
@@ -304,6 +304,35 @@ pub fn packet_entity_updates(count: usize, field_count: usize) -> Vec<u8> {
         push_bool_fields(&mut writer, field_count);
     }
     writer.finish()
+}
+
+/// Instance-baseline table containing `field_count` boolean fields for class zero.
+pub fn bool_instance_baseline(field_count: usize) -> StringTableContainer {
+    let mut baseline = BitWriter::default();
+    push_bool_fields(&mut baseline, field_count);
+    let bytes = baseline.finish();
+    let mut writer = BitWriter::default();
+    writer.push_bool(true); // sequential string-table index
+    writer.push_bool(true); // class key present
+    writer.push_bool(false); // no key history
+    for byte in b"0\0" {
+        writer.push_bits(u64::from(*byte), 8);
+    }
+    writer.push_bool(true); // baseline bytes present
+    writer.push_bits(bytes.len() as u64, 17);
+    for byte in bytes {
+        writer.push_bits(u64::from(byte), 8);
+    }
+    let mut tables = StringTableContainer::new();
+    tables
+        .handle_create(CreateStringTable::new(
+            "instancebaseline",
+            1,
+            writer.finish(),
+        ))
+        .expect("valid baseline table");
+    tables.update_instance_baselines();
+    tables
 }
 
 /// Container pre-populated by replaying [`packet_entity_creates`].

@@ -340,10 +340,15 @@ fn read_reference(
             }
             Node::Leaf { .. } => unreachable!(),
         };
-        if let Node::Leaf { op, .. } = node {
-            op(&mut path, br)?;
+        if let Node::Leaf { num, .. } = node {
+            (FIELDOP_DESCRIPTORS[*num].op)(&mut path, br)?;
             if path.finished {
                 return Ok(());
+            }
+            if path.data[0] < 0 {
+                return Err(Error::Parse {
+                    context: "field path has no root component".into(),
+                });
             }
             limits.ensure(
                 "entity field paths",
@@ -440,9 +445,20 @@ fn every_prefix_entry_agrees_with_the_tree_code_and_length() {
         match node {
             Node::Leaf { num, .. } => {
                 assert_eq!(usize::from(entry.bits), bits);
-                assert!(std::ptr::fn_addr_eq(entry.op, FIELDOP_DESCRIPTORS[*num].op));
+                assert_eq!(usize::from(entry.index), *num);
             }
             Node::Branch { .. } => assert_eq!(entry.bits, 0),
         }
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn prefix_decoder_matches_tree_on_arbitrary_input(
+        bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 1..128),
+        offset in 0usize..8,
+        max_fields in 0usize..64,
+    ) {
+        compare_reference(&bytes, offset, &DecodeLimits::default().with_max_field_paths(max_fields));
     }
 }

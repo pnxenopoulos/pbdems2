@@ -31,6 +31,15 @@ Deadlock and [Awpy](https://github.com/pnxenopoulos/awpy) for CS2.
 Game crates handle generated protobufs, events, domain models, constants, and
 language bindings. Basically, if it's specific to a game, you won't find it in pbdems2!
 
+Field paths use signed components and compact 64-bit keys. Treat field keys as
+opaque values. Resolve them from the current serializer; do not store numeric
+keys across parser upgrades. Pointer clears and vector shrink updates remove
+child values. Other partial updates preserve fields that were not sent.
+
+Decoded class baselines are cached within each entity container. Changes to
+baseline bytes, serializers, tick intervals, or decode limits invalidate reuse.
+Cloned sessions rebuild this cache on demand.
+
 ## Format guide
 
 The [PBDEMS2 format guide](https://docs.rs/pbdems2/latest/pbdems2/guide/index.html)
@@ -137,7 +146,7 @@ allocation, command, and packet errors keep useful context.
 The optional `mmap` feature provides an owning read-only map:
 
 ```toml
-pbdems2 = { version = "0.3", features = ["mmap"] }
+pbdems2 = { version = "0.4", features = ["mmap"] }
 ```
 
 ```rust
@@ -159,7 +168,7 @@ Serde support is on by default and includes <code>EntityId</code> and lifecycle
 records. Turn it off if you do not serialize decoded values:
 
 ```toml
-pbdems2 = { version = "0.3", default-features = false }
+pbdems2 = { version = "0.4", default-features = false }
 ```
 
 Consumer crates can keep old module paths with re-exports:

@@ -108,15 +108,7 @@ fn nested_name_benchmarks(criterion: &mut Criterion) {
 fn field_path_benchmarks(criterion: &mut Criterion) {
     let paths: Vec<FieldPath> = (0..4_096)
         .map(|index| FieldPath {
-            data: [
-                index as u8,
-                (index >> 2) as u8,
-                (index >> 4) as u8,
-                (index >> 6) as u8,
-                0,
-                0,
-                0,
-            ],
+            data: [index & 2047, index >> 2, index >> 4, index >> 6, 0, 0, 0],
             last: 3,
             finished: false,
         })

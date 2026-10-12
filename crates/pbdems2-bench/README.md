@@ -10,7 +10,7 @@ checked-in path-only captures. No game protobufs or demo downloads are needed.
 | `packet` | Inner framing, borrowed/copied payloads, bulk reads at four alignments, short tails |
 | `decoders` | Decoding and skipping numeric, string, vector, and angle fields |
 | `serializers` | Schema parsing, field lookup, type parsing, packed and Huffman paths |
-| `entities` | Dense/sparse lookup, field access, creates, updates, class filtering |
+| `entities` | Dense/sparse lookup, field access, creates, updates, class filtering, decoded baselines |
 | `string_tables` | Creates, updates, snapshots, prefix history, compressed user data |
 | `playback` | Populated signon, fresh/prepared runs, filtering, segments, seeking |
 | `input` | Heap and mmap scans, file-read/map setup, warm-cache 16 MiB input |
@@ -92,6 +92,9 @@ See [RESULTS.md](RESULTS.md) for the first refactor and
 [LOOKUP.md](LOOKUP.md) covers the lookup investigation and mixed pipeline.
 [RELEASE_0.3.2.md](RELEASE_0.3.2.md) checks the final candidate against published
 0.3.1, including retained safety guards and small lookup tradeoffs.
+
+[RELEASE_0.4.0.md](RELEASE_0.4.0.md) measures the correctness fixes and decoded
+baseline cache, including remaining performance costs.
 
 For actual Awpy and Boon dataset workloads, see the optional
 [real-demo profiling harness](real-world/README.md) and its

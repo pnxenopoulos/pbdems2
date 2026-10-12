@@ -31,3 +31,6 @@ lcov.info
 .codex-*.py
 .codex-patches/
 .patch-test
+
+# Generated benchmark reports (keep JSON fixtures in fixtures/)
+/crates/pbdems2-bench/*.json

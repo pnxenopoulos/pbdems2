@@ -36,3 +36,7 @@ allocation of reusable path scratch space happen outside the timer.
 
 Tests validate every fixture at all eight bit alignments with and without
 trailing data. These aren't end-to-end parser throughput measurements.
+
+The stored digests use the historical byte-packed path format. Validation keeps
+that digest format when testing newer decoders. The 0.4 decoder retains wider
+components; separate wire and property tests check their values and bounds.

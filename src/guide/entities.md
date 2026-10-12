@@ -140,3 +140,17 @@ Source 2 positions are split between integer cell coordinates and quantized
 in-cell offsets. [`Entity::world_position`](crate::Entity::world_position)
 combines both halves into Hammer-unit coordinates; reading only the offset
 produces values that reset at every cell boundary.
+
+## Structural updates and baselines
+
+Clearing a pointer removes its child fields. Reducing a vector length removes
+its discarded elements, including nested values. Increasing its length does
+not restore old values. Partial updates preserve other fields.
+
+Entity creation copies a decoded class baseline, then applies the create
+delta. Cached baselines are reused only with the same bytes, serializer schema,
+class, tick interval, and decode limits. Cloned sessions rebuild this cache.
+
+
+`PacketEntities` does not expose alternate or rolling baseline selection.
+The class-baseline cache does not add support for those packet modes.

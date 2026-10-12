@@ -120,3 +120,22 @@ For one entity create or update, pbdems2:
 Malformed paths, symbol indices, serializer references, and array lengths
 return contextual errors rather than indexing unchecked memory. Their counts
 and allocations are also bounded by [`DecodeLimits`](crate::DecodeLimits).
+
+## Field keys in 0.4
+
+`FieldPath::data` contains seven signed 16-bit components. The initial root is
+`-1`; a decoded field has nonnegative components. Compact keys allow component
+maxima of `2047, 4095, 2047, 255, 127, 15, 15`, by depth. Wire decoding returns
+an error outside these bounds. Name resolution returns `None`.
+
+Use `try_pack()` for caller-provided paths. `pack()` requires a valid path.
+Keys remain `u64`, but their numeric layout changed in 0.4. Resolve all keys
+again from the current schema after an upgrade. Do not persist numeric keys.
+
+
+## Remaining compatibility limits
+
+Serializer lookup retains the last definition for each name. It does not select
+versions or runtime polymorphic subtypes. A polymorphic pointer's selector is
+consumed, but it does not change the child schema. These cases need separate
+wire-level validation before support can be claimed.

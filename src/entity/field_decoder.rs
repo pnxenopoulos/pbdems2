@@ -425,9 +425,14 @@ impl Decoder {
             }
 
             Decoder::Vector3(inner) => {
-                inner.skip(ctx, br)?;
-                inner.skip(ctx, br)?;
-                inner.skip(ctx, br)?;
+                // A complete unquantized vector occupies 96 bits. Keep truncated
+                // inputs on the scalar path to preserve their errors and cursor.
+                return if matches!(inner.as_ref(), Decoder::F32NoScale) && br.bits_remaining() >= 96
+                {
+                    br.skip_bits(96)
+                } else {
+                    inner.skip_vector3_components(ctx, br)
+                };
             }
 
             Decoder::Vector3Normal => {
@@ -486,6 +491,39 @@ impl Decoder {
 
             Decoder::Default => {
                 br.skip_varint()?;
+            }
+        }
+        Ok(())
+    }
+
+    // Dispatch once for variable-width components. Keep this outside the common
+    // scalar path so its extra branches do not slow unrelated field skips.
+    #[inline(never)]
+    fn skip_vector3_components(
+        &self,
+        ctx: &mut FieldDecodeContext,
+        br: &mut BitReader,
+    ) -> Result<()> {
+        match self {
+            Decoder::F32Coord => {
+                br.skip_bitcoord()?;
+                br.skip_bitcoord()?;
+                br.skip_bitcoord()?;
+            }
+            Decoder::F32Normal => {
+                br.skip_bitnormal()?;
+                br.skip_bitnormal()?;
+                br.skip_bitnormal()?;
+            }
+            Decoder::F32Quantized(qf) => {
+                qf.skip(br)?;
+                qf.skip(br)?;
+                qf.skip(br)?;
+            }
+            _ => {
+                self.skip(ctx, br)?;
+                self.skip(ctx, br)?;
+                self.skip(ctx, br)?;
             }
         }
         Ok(())
@@ -1271,6 +1309,46 @@ mod tests {
             assert_eq!(&s, b"hello");
         } else {
             panic!("expected String");
+        }
+    }
+
+    #[test]
+    fn vector3_skip_preserves_scalar_errors_and_positions() {
+        let mut ctx = FieldDecodeContext::new(1.0 / 64.0);
+        let mut components = vec![
+            Decoder::F32NoScale,
+            Decoder::F32Coord,
+            Decoder::F32Normal,
+            Decoder::U64Fixed8,
+            Decoder::Vector2(Box::new(Decoder::F32Coord)),
+        ];
+        for bit_count in 1..32 {
+            for flags in 0..16 {
+                components.push(Decoder::F32Quantized(
+                    QuantizedFloat::new(bit_count, flags, -10.0, 100.0).unwrap(),
+                ));
+            }
+        }
+        for inner in components {
+            let vector = Decoder::Vector3(Box::new(inner.clone()));
+            for pattern in [0, 0xa5, 0xff] {
+                let bytes = [pattern; 13];
+                for len in 0..=bytes.len() {
+                    for offset in 0..=7.min(len * 8) {
+                        let mut scalar = BitReader::new(&bytes[..len]);
+                        let mut skipped = BitReader::new(&bytes[..len]);
+                        scalar.skip_bits(offset).unwrap();
+                        skipped.skip_bits(offset).unwrap();
+                        let expected = (0..3).try_for_each(|_| inner.skip(&mut ctx, &mut scalar));
+                        let actual = vector.skip(&mut ctx, &mut skipped);
+                        assert_eq!(
+                            actual.map_err(|e| e.to_string()),
+                            expected.map_err(|e| e.to_string())
+                        );
+                        assert_eq!(skipped.position(), scalar.position());
+                    }
+                }
+            }
         }
     }
 

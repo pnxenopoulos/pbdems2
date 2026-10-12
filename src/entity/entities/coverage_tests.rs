@@ -128,7 +128,7 @@ fn occupancy_survives_rejected_mutations_and_clone_changes() {
 
 fn field_key(index: u8) -> u64 {
     FieldPath {
-        data: [index, 0, 0, 0, 0, 0, 0],
+        data: [i16::from(index), 0, 0, 0, 0, 0, 0],
         last: 0,
         finished: false,
     }
@@ -848,4 +848,333 @@ fn full_handles_reject_stale_serials_and_invalid_sentinels() {
         entities.insert(entity).unwrap();
         assert!(entities.get_by_handle(handle).is_none());
     }
+}
+#[test]
+fn pointer_clear_removes_child_value() {
+    let definitions = FlattenedSerializer::new(
+        vec![
+            FlattenedSerializerDefinition::new(Some(1), vec![1]),
+            FlattenedSerializerDefinition::new(Some(0), vec![0, 1]),
+        ],
+        vec![
+            "CTest".into(),
+            "CChild".into(),
+            "CChild*".into(),
+            "m_child".into(),
+            "uint32".into(),
+            "m_value".into(),
+        ],
+        vec![
+            FlattenedField::new(Some(2), Some(3)).with_serializer_name_sym(Some(1)),
+            FlattenedField::new(Some(4), Some(5)),
+        ],
+    );
+    let serializers = SerializerContainer::parse(definitions, PROFILE).unwrap();
+    let serializer = serializers.get("CTest").unwrap();
+    let mut entity = Entity::new(0, 0, "CTest".into());
+    let child = serializer.resolve_field_key("m_child.m_value").unwrap();
+    entity.fields.insert(child, FieldValue::U32(42));
+    let mut partial = BitWriter::default();
+    emit_single_bool_update(&mut partial, true);
+    entity
+        .apply_update(
+            &mut BitReader::new(&partial.finish()),
+            serializer,
+            &mut FieldDecodeContext::new(1.0 / 64.0),
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert_eq!(entity.get_u32(Some(child)), 42);
+    let mut update = BitWriter::default();
+    emit_single_bool_update(&mut update, false);
+    entity
+        .apply_update(
+            &mut BitReader::new(&update.finish()),
+            serializer,
+            &mut FieldDecodeContext::new(1.0 / 64.0),
+            &mut Vec::new(),
+        )
+        .unwrap();
+    assert!(matches!(
+        entity.get_by_name("m_child", serializer),
+        Some(FieldValue::Bool(false))
+    ));
+    assert!(
+        entity.get_by_name("m_child.m_value", serializer).is_none(),
+        "child still present after pointer is false: {:?}",
+        entity.get_by_name("m_child.m_value", serializer)
+    );
+}
+
+#[test]
+fn dynamic_array_shrink_then_grow_does_not_restore_old_child() {
+    let serializers = SerializerContainer::parse(
+        FlattenedSerializer::new(
+            vec![FlattenedSerializerDefinition::new(Some(0), vec![0])],
+            vec![
+                "CTest".into(),
+                "CNetworkUtlVectorBase< uint32 >".into(),
+                "m_values".into(),
+            ],
+            vec![FlattenedField::new(Some(1), Some(2))],
+        ),
+        PROFILE,
+    )
+    .unwrap();
+    let serializer = serializers.get("CTest").unwrap();
+    let mut entity = Entity::new(0, 0, "CTest".into());
+    let child = serializer.resolve_field_key("m_values.1").unwrap();
+    entity.fields.insert(child, FieldValue::U32(99));
+    for count in [0, 2] {
+        let mut update = BitWriter::default();
+        emit_op(&mut update, 0);
+        emit_op(&mut update, FINISH);
+        update.push_uvarint32(count);
+        entity
+            .apply_update(
+                &mut BitReader::new(&update.finish()),
+                serializer,
+                &mut FieldDecodeContext::new(1.0 / 64.0),
+                &mut Vec::new(),
+            )
+            .unwrap();
+    }
+    assert!(
+        entity.get_by_name("m_values.1", serializer).is_none(),
+        "removed array element returned after regrowth: {:?}",
+        entity.get_by_name("m_values.1", serializer)
+    );
+}
+#[test]
+fn array_index_256_must_not_alias_zero() {
+    let serializers = SerializerContainer::parse(
+        FlattenedSerializer::new(
+            vec![FlattenedSerializerDefinition::new(Some(0), vec![0])],
+            vec![
+                "CTest".into(),
+                "CNetworkUtlVectorBase< uint32 >".into(),
+                "m_values".into(),
+            ],
+            vec![FlattenedField::new(Some(1), Some(2))],
+        ),
+        PROFILE,
+    )
+    .unwrap();
+    let serializer = serializers.get("CTest").unwrap();
+    assert_ne!(
+        serializer.resolve_field_key("m_values.0"),
+        serializer.resolve_field_key("m_values.256")
+    );
+}
+#[test]
+fn wire_array_index_256_must_not_alias_zero() {
+    let mut update = BitWriter::default();
+    emit_op(&mut update, 8);
+    update.push_ubitvarfp(256);
+    emit_op(&mut update, FINISH);
+    let mut paths = Vec::new();
+    field_path::read_field_paths(&mut BitReader::new(&update.finish()), &mut paths).unwrap();
+    assert_eq!(paths[0].get(0), 0);
+    assert_eq!(paths[0].get(1), 256, "wire array index was truncated");
+}
+
+#[test]
+fn wire_field_paths_reject_unrepresentable_components() {
+    for (op, value) in [(8, 4096), (8, 0x7fff_ffff), (4, 0x7fff_ffff)] {
+        let mut update = BitWriter::default();
+        emit_op(&mut update, op);
+        update.push_ubitvarfp(value);
+        emit_op(&mut update, FINISH);
+        let mut paths = Vec::new();
+        assert!(matches!(
+            field_path::read_field_paths(&mut BitReader::new(&update.finish()), &mut paths),
+            Err(Error::Parse { .. })
+        ));
+        assert!(paths.is_empty());
+    }
+}
+
+fn baseline_tables(value: bool) -> StringTableContainer {
+    let mut baseline = BitWriter::default();
+    emit_single_bool_update(&mut baseline, value);
+    let bytes = baseline.finish();
+    encoded_baseline_tables(&bytes)
+}
+
+fn encoded_baseline_tables(bytes: &[u8]) -> StringTableContainer {
+    let mut bits = BitWriter::default();
+    bits.push_bool(true);
+    bits.push_bool(true);
+    bits.push_bool(false);
+    bits.push_c_string("0");
+    bits.push_bool(true);
+    bits.push_bits(bytes.len() as u64, 17);
+    bits.push_bytes(bytes);
+    let mut tables = StringTableContainer::new();
+    tables
+        .handle_create(CreateStringTable::new(
+            super::super::string_tables::INSTANCE_BASELINE_TABLE_NAME,
+            1,
+            bits.finish(),
+        ))
+        .unwrap();
+    tables.update_instance_baselines();
+    tables
+}
+
+#[test]
+fn baseline_cache_invalidates_on_bytes_schema_clock_and_limits() {
+    let schemas = serializers();
+    let mut tables = baseline_tables(true);
+    let mut context = FieldDecodeContext::new(1.0 / 64.0);
+    let mut paths = Vec::new();
+    let mut cache = BaselineCache::default();
+    let mut entity = Entity::new(0, 0, "CTest".into());
+    let mut apply = |cache: &mut BaselineCache,
+                     tables: &StringTableContainer,
+                     schemas: &SerializerContainer,
+                     context: &mut FieldDecodeContext| {
+        cache
+            .apply(
+                &mut entity,
+                schemas.get("CTest").unwrap(),
+                schemas,
+                tables,
+                context,
+                &mut paths,
+            )
+            .unwrap();
+        entity.get_bool(Some(field_key(0)))
+    };
+    assert!(apply(&mut cache, &tables, &schemas, &mut context));
+    assert!(apply(&mut cache, &tables, &schemas, &mut context));
+    assert_eq!(cache.entries.len(), 1);
+    assert!(cache.clone().entries.is_empty());
+    tables = baseline_tables(false);
+    assert!(!apply(&mut cache, &tables, &schemas, &mut context));
+    let replacement = serializers();
+    assert!(!apply(&mut cache, &tables, &replacement, &mut context));
+    assert!(Arc::ptr_eq(
+        &cache.entries[&0].schema,
+        replacement.schema_id()
+    ));
+    context.set_tick_interval(1.0 / 30.0);
+    assert!(!apply(&mut cache, &tables, &replacement, &mut context));
+    assert_eq!(
+        cache.entries[&0].tick_interval,
+        context.tick_interval.to_bits()
+    );
+    let mut strict = FieldDecodeContext::with_limits(
+        1.0 / 30.0,
+        DecodeLimits::default().with_max_field_paths(0),
+    );
+    assert!(
+        cache
+            .apply(
+                &mut entity,
+                replacement.get("CTest").unwrap(),
+                &replacement,
+                &tables,
+                &mut strict,
+                &mut paths
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn cached_simulation_time_uses_the_current_tick_interval() {
+    let schemas = SerializerContainer::parse(
+        FlattenedSerializer::new(
+            vec![FlattenedSerializerDefinition::new(Some(0), vec![0])],
+            vec![
+                "CTest".into(),
+                "float32".into(),
+                "m_flSimulationTime".into(),
+                "simtime".into(),
+            ],
+            vec![FlattenedField::new(Some(1), Some(2)).with_encoder_sym(Some(3))],
+        ),
+        PROFILE,
+    )
+    .unwrap();
+    let mut bits = BitWriter::default();
+    emit_op(&mut bits, 0);
+    emit_op(&mut bits, FINISH);
+    bits.push_uvarint32(128);
+    let tables = encoded_baseline_tables(&bits.finish());
+    let mut cache = BaselineCache::default();
+    let mut entity = Entity::new(0, 0, "CTest".into());
+    let mut context = FieldDecodeContext::new(1.0 / 64.0);
+    for (interval, seconds) in [(1.0 / 64.0, 2.0), (1.0 / 32.0, 4.0)] {
+        context.set_tick_interval(interval);
+        cache
+            .apply(
+                &mut entity,
+                schemas.get("CTest").unwrap(),
+                &schemas,
+                &tables,
+                &mut context,
+                &mut Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(entity.get_f32(Some(field_key(0))), seconds);
+    }
+}
+
+#[test]
+fn wide_array_values_survive_independently_and_shrink_removes_only_discarded_elements() {
+    let schemas = SerializerContainer::parse(
+        FlattenedSerializer::new(
+            vec![FlattenedSerializerDefinition::new(Some(0), vec![0])],
+            vec![
+                "CTest".into(),
+                "CNetworkUtlVectorBase< uint32 >".into(),
+                "m_values".into(),
+            ],
+            vec![FlattenedField::new(Some(1), Some(2))],
+        ),
+        PROFILE,
+    )
+    .unwrap();
+    let serializer = schemas.get("CTest").unwrap();
+    let mut entity = Entity::new(0, 0, "CTest".into());
+    let mut bits = BitWriter::default();
+    emit_op(&mut bits, 0); // vector length
+    emit_op(&mut bits, 5); // element 0
+    emit_op(&mut bits, 4); // element 256: PlusN adds five
+    bits.push_ubitvarfp(251);
+    emit_op(&mut bits, FINISH);
+    for value in [257, 11, 22] {
+        bits.push_uvarint32(value);
+    }
+    entity
+        .apply_update(
+            &mut BitReader::new(&bits.finish()),
+            serializer,
+            &mut FieldDecodeContext::new(1.0 / 64.0),
+            &mut Vec::new(),
+        )
+        .unwrap();
+    let zero = serializer.resolve_field_key("m_values.0").unwrap();
+    let wide = serializer.resolve_field_key("m_values.256").unwrap();
+    assert_eq!(entity.get_u32(Some(zero)), 11);
+    assert_eq!(entity.get_u32(Some(wide)), 22);
+    for length in [1, 257] {
+        let mut bits = BitWriter::default();
+        emit_op(&mut bits, 0);
+        emit_op(&mut bits, FINISH);
+        bits.push_uvarint32(length);
+        entity
+            .apply_update(
+                &mut BitReader::new(&bits.finish()),
+                serializer,
+                &mut FieldDecodeContext::new(1.0 / 64.0),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(entity.get_u32(Some(zero)), 11);
+        assert!(entity.field_value(Some(wide)).is_none());
+    }
+    assert!(serializer.resolve_field_key("m_values.4096").is_none());
 }

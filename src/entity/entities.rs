@@ -5,6 +5,7 @@ use rustc_hash::FxHashMap;
 
 use crate::error::{Error, Result};
 use crate::io::BitReader;
+use crate::limits::DecodeLimits;
 
 use super::class_info::ClassInfo;
 use super::field_decoder::FieldDecodeContext;
@@ -288,7 +289,7 @@ impl Entity {
         for fp_idx in 0..fp_buf.len() {
             let field = resolve_field_path(serializer, &fp_buf[fp_idx])?;
 
-            let key = fp_buf[fp_idx].pack();
+            let key = fp_buf[fp_idx].pack_decoded();
             let value = field
                 .metadata
                 .decoder
@@ -305,10 +306,42 @@ impl Entity {
                         e
                     ),
                 })?;
+            // Shape updates invalidate removed descendants. Missing fields in
+            // ordinary partial updates leave all other values unchanged.
+            let cutoff = if field.metadata.is_pointer() && matches!(value, FieldValue::Bool(false))
+            {
+                Some(0)
+            } else if field.is_dynamic_array() {
+                let count = u64::try_from(&value).map_err(|_| Error::Parse {
+                    context: format!("invalid vector length at field {key:#x}"),
+                })?;
+                if self
+                    .fields
+                    .get(&key)
+                    .and_then(|old| u64::try_from(old).ok())
+                    .is_some_and(|old| old <= count)
+                {
+                    None
+                } else {
+                    Some(count)
+                }
+            } else {
+                None
+            };
+            if let Some(cutoff) = cutoff {
+                self.remove_descendants(key, cutoff);
+            }
             self.fields.insert(key, value);
         }
 
         Ok(())
+    }
+
+    // Keep the map scan out of the common field-update loop.
+    #[inline(never)]
+    fn remove_descendants(&mut self, key: u64, cutoff: u64) {
+        let retain = FieldPath::retain_after_shrink(key, cutoff);
+        self.fields.retain(|child_key, _| retain(*child_key));
     }
 
     /// Skip field updates - reads the data to advance the bit reader but doesn't store anything.
@@ -521,10 +554,83 @@ impl Entity {
     }
 }
 
+#[derive(Default)]
+struct BaselineCache {
+    entries: FxHashMap<i32, CachedBaseline>,
+}
+
+// Decoded baselines are derived scratch state. Cloned sessions rebuild the
+// cache on demand rather than copy maps that already exist on their entities.
+impl Clone for BaselineCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+struct CachedBaseline {
+    schema: Arc<()>,
+    revision: Arc<()>,
+    class_name: Arc<str>,
+    tick_interval: u32,
+    limits: DecodeLimits,
+    fields: FxHashMap<u64, FieldValue>,
+}
+
+impl BaselineCache {
+    fn apply(
+        &mut self,
+        entity: &mut Entity,
+        serializer: &Serializer,
+        serializers: &SerializerContainer,
+        tables: &StringTableContainer,
+        ctx: &mut FieldDecodeContext,
+        paths: &mut Vec<FieldPath>,
+    ) -> Result<()> {
+        let Some(bytes) = tables.instance_baseline(entity.class_id) else {
+            return Ok(());
+        };
+        let cached = self.entries.entry(entity.class_id);
+        let cached = match cached {
+            std::collections::hash_map::Entry::Occupied(entry)
+                if Arc::ptr_eq(&entry.get().schema, serializers.schema_id())
+                    && Arc::ptr_eq(&entry.get().revision, tables.baseline_revision())
+                    && entry.get().class_name == entity.class_name
+                    && entry.get().tick_interval == ctx.tick_interval.to_bits()
+                    && entry.get().limits == ctx.limits() =>
+            {
+                entry.into_mut()
+            }
+            entry => {
+                let mut baseline = Entity::new(0, entity.class_id, Arc::clone(&entity.class_name));
+                baseline.fields.reserve(serializer.fields.len());
+                baseline.apply_update(&mut BitReader::new(bytes), serializer, ctx, paths)?;
+                let baseline = CachedBaseline {
+                    schema: Arc::clone(serializers.schema_id()),
+                    revision: Arc::clone(tables.baseline_revision()),
+                    class_name: Arc::clone(&entity.class_name),
+                    tick_interval: ctx.tick_interval.to_bits(),
+                    limits: ctx.limits(),
+                    fields: baseline.fields,
+                };
+                match entry {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        entry.insert(baseline);
+                        entry.into_mut()
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => entry.insert(baseline),
+                }
+            }
+        };
+        entity.fields.clone_from(&cached.fields);
+        Ok(())
+    }
+}
+
 /// Container managing all active entities.
 #[derive(Clone, Default)]
 pub struct EntityContainer {
     serializer_bindings: SerializerBindings,
+    baseline_cache: BaselineCache,
     /// Active (and dormant) entities, indexed **directly by entity index** — a
     /// dense slot array rather than a hash map, so every `get` / `get_mut` /
     /// `get_by_handle` (which fire on essentially every entity update) is a
@@ -695,6 +801,28 @@ impl EntityContainer {
         field_decode_ctx: &mut FieldDecodeContext,
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
+        self.handle_packet_entities_impl::<false>(
+            msg,
+            class_info,
+            serializers,
+            string_tables,
+            field_decode_ctx,
+            None,
+            fp_buf,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_packet_entities_impl<const FILTERED: bool>(
+        &mut self,
+        msg: PacketEntities<'_>,
+        class_info: &ClassInfo,
+        serializers: &SerializerContainer,
+        string_tables: &StringTableContainer,
+        field_decode_ctx: &mut FieldDecodeContext,
+        class_filter: Option<&HashSet<&str>>,
+        fp_buf: &mut Vec<FieldPath>,
+    ) -> Result<()> {
         let update_count = usize::try_from(msg.updated_entries).map_err(|_| Error::Parse {
             context: format!(
                 "negative packet-entity update count {}",
@@ -735,6 +863,7 @@ impl EntityContainer {
                         serializers,
                         string_tables,
                         field_decode_ctx,
+                        class_filter,
                         fp_buf,
                     )
                     .map_err(|e| Error::Parse {
@@ -746,24 +875,35 @@ impl EntityContainer {
                     if has_pvs_vis_bits > 0 && (br.read_bits(2)? & 0x01) != 0 {
                         continue;
                     }
-                    self.handle_update(
-                        entity_index,
-                        &mut br,
-                        serializers,
-                        field_decode_ctx,
-                        fp_buf,
-                    )
-                    .map_err(|e| Error::Parse {
-                        context: format!(
-                            "entity update #{} (class: {:?}): {}",
+                    if FILTERED {
+                        self.handle_update_filtered(
                             entity_index,
-                            self.get(entity_index).map(|e| &e.class_name),
-                            e
-                        ),
-                    })?;
+                            &mut br,
+                            class_info,
+                            serializers,
+                            field_decode_ctx,
+                            fp_buf,
+                        )?;
+                    } else {
+                        self.handle_update(
+                            entity_index,
+                            &mut br,
+                            serializers,
+                            field_decode_ctx,
+                            fp_buf,
+                        )
+                        .map_err(|e| Error::Parse {
+                            context: format!(
+                                "entity update #{} (class: {:?}): {}",
+                                entity_index,
+                                self.get(entity_index).map(|e| &e.class_name),
+                                e
+                            ),
+                        })?;
+                    }
                 }
             } else {
-                self.handle_leave(entity_index, cmd & CMD_CREATE_DELETE != 0);
+                self.handle_leave_filtered(entity_index, cmd & CMD_CREATE_DELETE != 0);
             }
         }
 
@@ -807,68 +947,15 @@ impl EntityContainer {
         class_filter: &HashSet<&str>,
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
-        let update_count = usize::try_from(msg.updated_entries).map_err(|_| Error::Parse {
-            context: format!(
-                "negative packet-entity update count {}",
-                msg.updated_entries
-            ),
-        })?;
-        let limits = field_decode_ctx.limits();
-        limits.ensure(
-            "packet entity updates",
-            update_count,
-            limits.max_packet_entity_updates(),
-        )?;
-        let has_pvs_vis_bits = msg.has_pvs_vis_bits;
-        self.serializer_bindings.refresh(class_info, serializers);
-        let entity_data = msg.entity_data;
-        let mut br = BitReader::new(entity_data);
-
-        let mut entity_index: i32 = -1;
-
-        for _ in 0..update_count {
-            let next = i64::from(entity_index) + i64::from(br.read_ubitvar()?) + 1;
-            if !(0..=MAX_ENTITY_INDEX).contains(&next) {
-                return Err(Error::Parse {
-                    context: format!("entity index {next} out of range"),
-                });
-            }
-            entity_index = next as i32;
-
-            // Read the 2-bit delta command (see CMD_LEAVE / CMD_CREATE_DELETE).
-            let cmd = br.read_bits(2)? as u8;
-
-            if cmd & CMD_LEAVE == 0 {
-                if cmd & CMD_CREATE_DELETE != 0 {
-                    self.handle_create_filtered(
-                        entity_index,
-                        &mut br,
-                        class_info,
-                        serializers,
-                        string_tables,
-                        field_decode_ctx,
-                        class_filter,
-                        fp_buf,
-                    )?;
-                } else {
-                    if has_pvs_vis_bits > 0 && (br.read_bits(2)? & 0x01) != 0 {
-                        continue;
-                    }
-                    self.handle_update_filtered(
-                        entity_index,
-                        &mut br,
-                        class_info,
-                        serializers,
-                        field_decode_ctx,
-                        fp_buf,
-                    )?;
-                }
-            } else {
-                self.handle_leave_filtered(entity_index, cmd & CMD_CREATE_DELETE != 0);
-            }
-        }
-
-        Ok(())
+        self.handle_packet_entities_impl::<true>(
+            msg,
+            class_info,
+            serializers,
+            string_tables,
+            field_decode_ctx,
+            Some(class_filter),
+            fp_buf,
+        )
     }
 
     /// Leave/delete handling for the class-filtered path.
@@ -894,6 +981,7 @@ impl EntityContainer {
         serializers: &SerializerContainer,
         string_tables: &StringTableContainer,
         field_decode_ctx: &mut FieldDecodeContext,
+        class_filter: Option<&HashSet<&str>>,
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
         let class_id = br.read_bits(class_info.bits())? as i32;
@@ -911,6 +999,13 @@ impl EntityContainer {
                 context: format!("no serializer for {}", class_entry.network_name),
             })?;
 
+        if class_filter.is_some_and(|filter| !filter.contains(class_entry.network_name.as_ref())) {
+            Entity::skip_update(br, serializer, field_decode_ctx, fp_buf)?;
+            self.delete_entity(index);
+            self.set_skipped(index, Some(class_id));
+            return Ok(());
+        }
+
         let mut entity = Entity::new(index, class_id, Arc::clone(&class_entry.network_name));
         entity.serial = serial;
         // Pre-size the field map to the class's field count: a create applies the
@@ -918,18 +1013,21 @@ impl EntityContainer {
         // from an empty map otherwise rehashes repeatedly as it grows.
         entity.fields.reserve(serializer.fields.len());
 
-        // Apply baseline from instancebaseline string table
-        if let Some(baseline_data) = string_tables.instance_baseline(class_id) {
-            let mut baseline_br = BitReader::new(baseline_data);
-            entity
-                .apply_update(&mut baseline_br, serializer, field_decode_ctx, fp_buf)
-                .map_err(|err| Error::Parse {
-                    context: format!(
-                        "baseline for {} (class_id {}): {}",
-                        class_entry.network_name, class_id, err
-                    ),
-                })?;
-        }
+        self.baseline_cache
+            .apply(
+                &mut entity,
+                serializer,
+                serializers,
+                string_tables,
+                field_decode_ctx,
+                fp_buf,
+            )
+            .map_err(|err| Error::Parse {
+                context: format!(
+                    "baseline for {} (class_id {}): {err}",
+                    class_entry.network_name, class_id
+                ),
+            })?;
 
         // Apply create delta
         entity
@@ -940,6 +1038,7 @@ impl EntityContainer {
                     class_entry.network_name, class_id, err
                 ),
             })?;
+        self.set_skipped(index, None);
         self.put_entity(index, entity);
 
         Ok(())
@@ -981,67 +1080,6 @@ impl EntityContainer {
         self.updated.push(index);
         self.changes.push(change);
         Ok(())
-    }
-
-    /// Returns `true` if the entity's class passed the filter and was stored.
-    #[allow(clippy::too_many_arguments)]
-    fn handle_create_filtered(
-        &mut self,
-        index: i32,
-        br: &mut BitReader,
-        class_info: &ClassInfo,
-        serializers: &SerializerContainer,
-        string_tables: &StringTableContainer,
-        field_decode_ctx: &mut FieldDecodeContext,
-        class_filter: &HashSet<&str>,
-        fp_buf: &mut Vec<FieldPath>,
-    ) -> Result<bool> {
-        let class_id = br.read_bits(class_info.bits())? as i32;
-        let serial = br.read_bits(NUM_SERIAL_NUM_BITS as usize)? as u32;
-        let _unknown = br.read_uvarint32()?;
-
-        let class_entry = class_info.by_id(class_id).ok_or_else(|| Error::Parse {
-            context: format!("unknown class_id {class_id}"),
-        })?;
-
-        let serializer = self
-            .serializer_bindings
-            .get(class_id, &class_entry.network_name, serializers)
-            .ok_or_else(|| Error::Parse {
-                context: format!("no serializer for {}", class_entry.network_name),
-            })?;
-
-        // A create is a fresh entity at this slot. Clear any stale entry for the
-        // index from the *other* map so a later update can't misroute to a
-        // previous occupant of the slot (e.g. a tracked weapon that left the PVS
-        // and stayed cached while the slot was reused by a skipped entity). This
-        // matters because leaves keep entities around, so slots get reused.
-        if !class_filter.contains(class_entry.network_name.as_ref()) {
-            // Skip this entity - just advance the bit reader, but track its
-            // class_id so later updates to it can be skipped correctly.
-            Entity::skip_update(br, serializer, field_decode_ctx, fp_buf)?;
-            self.delete_entity(index);
-            self.set_skipped(index, Some(class_id));
-            return Ok(false);
-        }
-        // Full processing for filtered entities
-        let mut entity = Entity::new(index, class_id, Arc::clone(&class_entry.network_name));
-        entity.serial = serial;
-        // Pre-size the field map to the class's field count: a create applies the
-        // baseline plus the create delta, setting many fields at once, so starting
-        // from an empty map otherwise rehashes repeatedly as it grows.
-        entity.fields.reserve(serializer.fields.len());
-
-        if let Some(baseline_data) = string_tables.instance_baseline(class_id) {
-            let mut baseline_br = BitReader::new(baseline_data);
-            entity.apply_update(&mut baseline_br, serializer, field_decode_ctx, fp_buf)?;
-        }
-
-        entity.apply_update(br, serializer, field_decode_ctx, fp_buf)?;
-        self.set_skipped(index, None);
-        self.put_entity(index, entity);
-
-        Ok(true)
     }
 
     /// Returns `true` if this entity is tracked and was updated (vs. skipped).

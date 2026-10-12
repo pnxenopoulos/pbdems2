@@ -1,4 +1,5 @@
 use std::collections::{HashMap, hash_map::Entry};
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::io::BitReader;
@@ -449,6 +450,7 @@ pub struct StringTableContainer {
     tables: Vec<StringTable>,
     /// Cached instance baselines: class_id -> baseline data.
     instance_baselines: HashMap<i32, Vec<u8>>,
+    baseline_revision: Arc<()>,
 }
 
 impl StringTableContainer {
@@ -610,6 +612,7 @@ impl StringTableContainer {
 
     /// Update instance baselines from the instancebaseline string table.
     pub fn update_instance_baselines(&mut self) {
+        let mut changed = false;
         if let Some(table) = self
             .tables
             .iter()
@@ -623,15 +626,24 @@ impl StringTableContainer {
                         Entry::Occupied(mut entry) => {
                             if entry.get() != data {
                                 entry.get_mut().clone_from(data);
+                                changed = true;
                             }
                         }
                         Entry::Vacant(entry) => {
                             entry.insert(data.clone());
+                            changed = true;
                         }
                     }
                 }
             }
         }
+        if changed {
+            self.baseline_revision = Arc::new(());
+        }
+    }
+
+    pub(super) fn baseline_revision(&self) -> &Arc<()> {
+        &self.baseline_revision
     }
 
     /// Cached instance baseline bytes for a numeric class ID.

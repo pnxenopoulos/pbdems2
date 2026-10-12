@@ -1,3 +1,8 @@
+// Keep allocator selection in the executable; the parser library uses its caller's allocator.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::collections::HashSet;
 use std::hint::black_box;
 use std::path::Path;

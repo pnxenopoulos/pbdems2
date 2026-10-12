@@ -2,6 +2,16 @@
 
 Notable pbdems2 changes live here.
 
+## v0.4.0
+
+- **Rust API change:** Use `[i16; 7]` field-path components and a new compact key layout. Resolve cached field keys again after an upgrade.
+- Preserve field indices above 255. Reject paths outside the packed bounds.
+- Use packed keys to remove child values when pointers clear or vectors shrink.
+- Cache decoded class baselines. Invalidate the cache when bytes, schemas, clocks, or limits change. Rebuild it in cloned sessions.
+- Share packet walking and entity creation across filtered and full parsing.
+- Reduce work during field-path decoding, player entity parsing, and 3D vector skips. Preserve bounds checks and truncated-input errors.
+- Fix integer overflow during 31-bit quantized-float setup.
+
 ## v0.3.6
 
 - Add exact completed-tick checkpoints with validated replay continuation.

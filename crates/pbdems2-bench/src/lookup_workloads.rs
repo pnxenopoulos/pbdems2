@@ -75,7 +75,9 @@ impl Schema {
 
 fn key(indices: &[u8]) -> u64 {
     let mut path = FieldPath::default();
-    path.data[..indices.len()].copy_from_slice(indices);
+    for (component, &index) in path.data.iter_mut().zip(indices) {
+        *component = i16::from(index);
+    }
     path.last = indices.len() - 1;
     path.pack()
 }

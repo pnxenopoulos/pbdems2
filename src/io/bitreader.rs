@@ -293,6 +293,16 @@ impl<'a> BitReader<'a> {
     /// 2, 4, 10, 17, or 31 bits depending on which prefix bit is set.
     #[inline]
     pub fn read_ubitvarfp(&mut self) -> Result<u32> {
+        // A complete selector and the longest payload fit in 35 bits. Near
+        // EOF retain the stepwise reader and its exact error cursor.
+        if self.bits_remaining() >= 35 {
+            let word = self.peek_bits_unchecked(35);
+            let selector = (word as u32).trailing_zeros().min(4) as usize;
+            let prefix_bits = (selector + 1).min(4);
+            let payload_bits = [2, 4, 10, 17, 31][selector];
+            self.position += prefix_bits + payload_bits;
+            return Ok(((word >> prefix_bits) & mask(payload_bits)) as u32);
+        }
         if self.read_bool()? {
             return Ok(self.read_bits(2)? as u32);
         }
@@ -734,5 +744,79 @@ mod tests {
         let data = [0x00, 0x00, 0x00, 0x00];
         let mut br = BitReader::new(&data);
         assert!((br.read_bitangle(16).unwrap() - 0.0).abs() < f32::EPSILON);
+    }
+}
+
+#[cfg(test)]
+mod field_path_varint_tests {
+    use super::*;
+
+    fn read_reference(reader: &mut BitReader) -> Result<u32> {
+        for width in [2, 4, 10, 17] {
+            if reader.read_bool()? {
+                return Ok(reader.read_bits(width)? as u32);
+            }
+        }
+        Ok(reader.read_bits(31)? as u32)
+    }
+
+    #[test]
+    fn every_width_alignment_and_truncation_matches_the_reference() {
+        use crate::test_utils::BitWriter;
+
+        for (selector, width) in [2, 4, 10, 17, 31].into_iter().enumerate() {
+            for value in [0, 1, (1u64 << width) - 1] {
+                for offset in 0..8 {
+                    let mut writer = BitWriter::default();
+                    writer.push_bits(0, offset);
+                    for _ in 0..selector.min(4) {
+                        writer.push_bool(false);
+                    }
+                    if selector < 4 {
+                        writer.push_bool(true);
+                    }
+                    writer.push_bits(value, width);
+                    writer.push_bits(0xabcdef12, 32);
+                    let bytes = writer.finish();
+                    for end in 0..=bytes.len() {
+                        if end * 8 < offset {
+                            continue;
+                        }
+                        let mut actual = BitReader::new(&bytes[..end]);
+                        let mut reference = BitReader::new(&bytes[..end]);
+                        actual.skip_bits(offset).unwrap();
+                        reference.skip_bits(offset).unwrap();
+                        assert_eq!(
+                            format!("{:?}", actual.read_ubitvarfp()),
+                            format!("{:?}", read_reference(&mut reference))
+                        );
+                        assert_eq!(actual.position(), reference.position());
+                        if end == bytes.len() {
+                            assert_eq!(actual.read_bits(32).unwrap(), 0xabcdef12);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn combined_field_path_varints_preserve_values_errors_and_cursors(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 1..128),
+            offset in 0usize..8,
+        ) {
+            let mut actual = BitReader::new(&bytes);
+            let mut reference = BitReader::new(&bytes);
+            actual.skip_bits(offset).unwrap();
+            reference.skip_bits(offset).unwrap();
+            loop {
+                let actual_result = actual.read_ubitvarfp();
+                let reference_result = read_reference(&mut reference);
+                proptest::prop_assert_eq!(format!("{actual_result:?}"), format!("{reference_result:?}"));
+                proptest::prop_assert_eq!(actual.position(), reference.position());
+                if actual_result.is_err() { break; }
+            }
+        }
     }
 }
