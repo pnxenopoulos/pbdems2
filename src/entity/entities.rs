@@ -1215,30 +1215,12 @@ mod tests {
     }
 
     #[test]
-    fn entity_fields_insert_and_get() {
-        let mut e = Entity::new(1, 10, "TestClass".into());
-        e.fields.insert(42, FieldValue::I32(100));
-        assert!(matches!(e.fields.get(&42), Some(FieldValue::I32(100))));
-    }
-
-    #[test]
-    fn container_insert_and_iter() {
-        let mut c = EntityContainer::new();
-        let e = Entity::new(5, 10, "Hero".into());
-        c.put_entity(5, e);
-        assert_eq!(c.len(), 1);
-        assert!(!c.is_empty());
-        assert!(c.get(5).is_some());
-        assert_eq!(&*c.get(5).unwrap().class_name, "Hero");
-    }
-
-    #[test]
     fn container_iter_yields_entries() {
         let mut c = EntityContainer::new();
         c.put_entity(1, Entity::new(1, 1, "A".into()));
         c.put_entity(2, Entity::new(2, 2, "B".into()));
         let keys: Vec<i32> = c.iter().map(|(k, _)| k).collect();
-        assert_eq!(keys.len(), 2);
+        assert_eq!(keys, [1, 2]);
     }
 
     #[test]

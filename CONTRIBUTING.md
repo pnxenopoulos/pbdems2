@@ -29,6 +29,16 @@ Add or update a deterministic benchmark for hot-path changes. Use
 the values in your PR. See the [benchmark guide](crates/pbdems2-bench/README.md)
 for setup, filters, and comparisons. Hosted CI only smoke-tests the suite.
 
+## Test conventions
+
+Each test checks one behavior. Several assertions can describe the same result.
+Use descriptive names and separate independent failure cases.
+Use small fixture builders for common setup. Keep mutable parser state local to each test.
+
+Retain distinct wire formats, error cases, game profiles, and filtered decoding paths.
+Remove duplicate tests only when the same behavior and path remain covered.
+Use RAII guards for temporary files and settings so failed assertions still clean up.
+
 ## Rust conventions
 
 Shared dependency versions and selected Clippy lints live in the workspace

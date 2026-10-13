@@ -620,57 +620,126 @@ mod tests {
         bytes
     }
 
-    #[test]
-    fn exact_checkpoints_resume_only_after_completed_ticks() {
+    fn repeated_tick_fixture() -> Vec<u8> {
         let mut bytes = fixture();
-        // Two commands at tick 2 must be captured together.
         bytes.splice(
             HEADER_SIZE + 6 * 3..HEADER_SIZE + 6 * 3,
             [command::PACKET as u8, 2, 0],
         );
+        bytes
+    }
+
+    fn checkpoint_at_second_tick(bytes: &[u8]) -> PlaybackCheckpoint<StatefulAdapter> {
+        let parser = DemoParser::new(bytes).unwrap();
+        parser
+            .prepare(StatefulAdapter::default(), 1.0 / 30.0)
+            .unwrap()
+            .session(parser)
+            .unwrap()
+            .checkpoint_through(2, &HashSet::from(["CTest"]), |_, adapter| {
+                adapter.tick_messages.clear();
+                Ok(())
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn checkpoints_capture_every_command_in_the_completed_tick() {
+        let bytes = repeated_tick_fixture();
         let parser = DemoParser::new(&bytes).unwrap();
         let prepared = parser
             .prepare(StatefulAdapter::default(), 1.0 / 30.0)
             .unwrap();
-        let filter = HashSet::from(["CTest"]);
-        let mut first = Vec::new();
+        let mut ticks = Vec::new();
         let checkpoint = prepared
             .session(parser)
             .unwrap()
-            .checkpoint_through(2, &filter, |state, adapter| {
-                first.push((state.tick(), adapter.tick_messages.clone()));
+            .checkpoint_through(2, &HashSet::from(["CTest"]), |state, adapter| {
+                ticks.push((state.tick(), adapter.tick_messages.clone()));
                 adapter.tick_messages.clear();
                 Ok(())
             })
             .unwrap();
-        assert_eq!(first, [(1, vec![1]), (2, vec![2, 2])]);
+        assert_eq!(ticks, [(1, vec![1]), (2, vec![2, 2])]);
         assert_eq!(checkpoint.state().tick(), 2);
-        for _ in 0..2 {
-            let mut resumed = Vec::new();
-            let next = checkpoint
-                .replay_through(parser, 3, |state, adapter| {
-                    resumed.push((state.tick(), adapter.tick_messages.clone()));
+    }
+
+    #[test]
+    fn resumed_checkpoints_emit_only_later_ticks() {
+        let bytes = repeated_tick_fixture();
+        let checkpoint = checkpoint_at_second_tick(&bytes);
+        let mut ticks = Vec::new();
+        let next = checkpoint
+            .replay_through(DemoParser::new(&bytes).unwrap(), 3, |state, adapter| {
+                ticks.push((state.tick(), adapter.tick_messages.clone()));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(ticks, [(3, vec![3])]);
+        assert_eq!(next.state().tick(), 3);
+    }
+
+    #[test]
+    fn checkpoints_can_be_replayed_more_than_once() {
+        let bytes = repeated_tick_fixture();
+        let checkpoint = checkpoint_at_second_tick(&bytes);
+        let replay = || {
+            let mut ticks = Vec::new();
+            checkpoint
+                .replay_through(DemoParser::new(&bytes).unwrap(), 4, |state, adapter| {
+                    ticks.push((state.tick(), adapter.tick_messages.clone()));
                     adapter.tick_messages.clear();
                     Ok(())
                 })
                 .unwrap();
-            assert_eq!(resumed, [(3, vec![3])]);
-            assert_eq!(next.state().tick(), 3);
-            let mut final_ticks = Vec::new();
-            next.replay_through(parser, 4, |state, _| {
-                final_ticks.push(state.tick());
-                Ok(())
-            })
+            ticks
+        };
+        assert_eq!(replay(), replay());
+    }
+
+    #[test]
+    fn resumed_checkpoints_can_continue_to_the_stop_tick() {
+        let bytes = repeated_tick_fixture();
+        let parser = DemoParser::new(&bytes).unwrap();
+        let next = checkpoint_at_second_tick(&bytes)
+            .replay_through(parser, 3, |_, _| Ok(()))
             .unwrap();
-            assert_eq!(final_ticks, [4]);
-        }
+        let mut ticks = Vec::new();
+        next.replay_through(parser, 4, |state, _| {
+            ticks.push(state.tick());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(ticks, [4]);
+    }
+
+    #[test]
+    fn checkpoints_reject_different_demo_storage() {
+        let bytes = repeated_tick_fixture();
+        let checkpoint = checkpoint_at_second_tick(&bytes);
         let other = bytes.clone();
+        assert_ne!(bytes.as_ptr(), other.as_ptr());
         assert!(
             checkpoint
                 .replay_through(DemoParser::new(&other).unwrap(), 3, |_, _| Ok(()))
                 .is_err()
         );
-        assert!(checkpoint.replay_through(parser, 1, |_, _| Ok(())).is_err());
+    }
+
+    #[test]
+    fn checkpoints_reject_backward_targets() {
+        let bytes = repeated_tick_fixture();
+        assert!(
+            checkpoint_at_second_tick(&bytes)
+                .replay_through(DemoParser::new(&bytes).unwrap(), 1, |_, _| Ok(()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn checkpoints_reject_changed_decode_limits() {
+        let bytes = repeated_tick_fixture();
+        let checkpoint = checkpoint_at_second_tick(&bytes);
         let limits = DecodeLimits::default().with_max_command_body_bytes(1024);
         assert!(
             checkpoint
@@ -681,8 +750,14 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn checkpoints_do_not_emit_the_completed_tick_again() {
+        let bytes = repeated_tick_fixture();
+        let checkpoint = checkpoint_at_second_tick(&bytes);
         let same = checkpoint
-            .replay_through(parser, 2, |_, _| {
+            .replay_through(DemoParser::new(&bytes).unwrap(), 2, |_, _| {
                 panic!("must not re-emit a completed tick")
             })
             .unwrap();
@@ -731,64 +806,100 @@ mod tests {
     }
 
     #[test]
-    fn segment_plan_is_bounded_balanced_and_never_empty() {
+    fn preparation_indexes_every_full_packet() {
         let bytes = segmented_fixture();
-        let parser = DemoParser::new(&bytes).expect("valid demo");
-        let prepared = parser
+        let prepared = DemoParser::new(&bytes)
+            .unwrap()
             .prepare(StatefulAdapter::default(), 1.0 / 30.0)
-            .expect("valid preparation");
-        let full_packets = prepared.index().full_packets();
+            .unwrap();
         assert_eq!(
-            full_packets
+            prepared
+                .index()
+                .full_packets()
                 .iter()
                 .map(|position| position.tick())
                 .collect::<Vec<_>>(),
             [2, 4, 6, 8]
         );
+    }
 
-        let plan = prepared.segment_plan(3);
+    #[test]
+    fn segment_plan_balances_workers_at_full_packets() {
+        let bytes = segmented_fixture();
+        let prepared = DemoParser::new(&bytes)
+            .unwrap()
+            .prepare(StatefulAdapter::default(), 1.0 / 30.0)
+            .unwrap();
+        let full_packets = prepared.index().full_packets();
+        let boundaries = prepared
+            .segment_plan(3)
+            .iter()
+            .map(|segment| (segment.start_offset(), segment.end_tick()))
+            .collect::<Vec<_>>();
         assert_eq!(
-            plan.iter()
-                .map(|segment| (segment.start_offset(), segment.end_tick()))
-                .collect::<Vec<_>>(),
+            boundaries,
             [
                 (None, 2),
                 (Some(full_packets[0].offset()), 6),
-                (Some(full_packets[2].offset()), i32::MAX),
+                (Some(full_packets[2].offset()), i32::MAX)
             ]
         );
+    }
 
-        let maximum = prepared.segment_plan(usize::MAX);
-        assert_eq!(maximum.len(), full_packets.len() + 1);
-        assert_eq!(maximum[0].start_offset(), None);
-        assert_eq!(maximum[0].end_tick(), 2);
+    #[test]
+    fn segment_plan_caps_the_worker_count_at_available_segments() {
+        let bytes = segmented_fixture();
+        let prepared = DemoParser::new(&bytes)
+            .unwrap()
+            .prepare(StatefulAdapter::default(), 1.0 / 30.0)
+            .unwrap();
+        let full_packets = prepared.index().full_packets();
+        let plan = prepared.segment_plan(usize::MAX);
+        assert_eq!(plan.len(), full_packets.len() + 1);
+        assert_eq!((plan[0].start_offset(), plan[0].end_tick()), (None, 2));
         assert_eq!(
-            maximum.last().map(PlaybackSegment::start_offset),
-            Some(Some(full_packets[3].offset()))
+            (
+                plan.last().unwrap().start_offset(),
+                plan.last().unwrap().end_tick()
+            ),
+            (Some(full_packets[3].offset()), i32::MAX)
         );
-        assert_eq!(
-            maximum.last().map(PlaybackSegment::end_tick),
-            Some(i32::MAX)
-        );
+    }
 
-        let minimum = prepared.segment_plan(0);
-        assert_eq!(minimum.len(), 1);
-        assert_eq!(minimum[0].start_offset(), None);
-        assert_eq!(minimum[0].end_tick(), i32::MAX);
+    #[test]
+    fn zero_workers_still_produce_one_complete_segment() {
+        let bytes = segmented_fixture();
+        let prepared = DemoParser::new(&bytes)
+            .unwrap()
+            .prepare(StatefulAdapter::default(), 1.0 / 30.0)
+            .unwrap();
+        let boundaries = prepared
+            .segment_plan(0)
+            .iter()
+            .map(|segment| (segment.start_offset(), segment.end_tick()))
+            .collect::<Vec<_>>();
+        assert_eq!(boundaries, [(None, i32::MAX)]);
+    }
 
-        let filter = HashSet::from(["CTest"]);
+    #[test]
+    fn decoding_planned_segments_visits_each_tick_once() {
+        let bytes = segmented_fixture();
+        let parser = DemoParser::new(&bytes).unwrap();
+        let prepared = parser
+            .prepare(StatefulAdapter::default(), 1.0 / 30.0)
+            .unwrap();
         let mut ticks = Vec::new();
-        for segment in plan {
+        for segment in prepared.segment_plan(3) {
             prepared
                 .session(parser)
-                .expect("matching demo")
+                .unwrap()
                 .decode_segment(
                     segment.start_offset(),
                     segment.end_tick(),
-                    &filter,
+                    &HashSet::from(["CTest"]),
                     |state| ticks.push(state.tick()),
                 )
-                .expect("planned segment playback");
+                .unwrap();
         }
         assert_eq!(ticks, (1..=10).collect::<Vec<_>>());
     }

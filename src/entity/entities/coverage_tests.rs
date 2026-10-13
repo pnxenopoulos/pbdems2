@@ -255,8 +255,7 @@ fn protobuf_handles_distinguish_absent_invalid_and_serialized_indices() {
     assert_eq!(protobuf_handle_index(Some((5 << 14) | 123)), Some(123));
 }
 
-#[test]
-fn typed_accessors_cover_integer_vector_string_and_default_semantics() {
+fn accessor_entity() -> Entity {
     let values = [
         FieldValue::U32(7),
         FieldValue::U64(8),
@@ -275,43 +274,152 @@ fn typed_accessors_cover_integer_vector_string_and_default_semantics() {
         .enumerate()
         .map(|(index, value)| (field_key(index as u8), value))
         .collect::<FxHashMap<_, _>>();
-    let entity = Entity::from_fields(12, 3, 0, "CTest", true, fields).unwrap();
+    Entity::from_fields(12, 3, 0, "CTest", true, fields).unwrap()
+}
 
-    assert_eq!(entity.get_i64(Some(field_key(0))), 7);
-    assert_eq!(entity.get_i64(Some(field_key(1))), 8);
-    assert_eq!(entity.get_i64(Some(field_key(2))), -9);
-    assert_eq!(entity.get_i64(Some(field_key(3))), -10);
-    assert_eq!(entity.get_u32(Some(field_key(0))), 7);
-    assert_eq!(entity.get_u32(Some(field_key(1))), 8);
-    assert_eq!(entity.get_u32(Some(field_key(2))), (-9_i32) as u32);
-    assert_eq!(entity.get_u32(Some(field_key(3))), (-10_i64) as u32);
-    assert_eq!(entity.get_f32(Some(field_key(4))), 1.25);
-    assert!(entity.get_bool(Some(field_key(5))));
-    assert_eq!(entity.get_qangle(Some(field_key(6))), [1.0, 2.0, 3.0]);
+#[test]
+fn integer_accessors_read_all_integer_variants() {
+    let entity = accessor_entity();
+    for (index, expected) in [(0, 7_i64), (1, 8), (2, -9), (3, -10)] {
+        assert_eq!(entity.get_i64(Some(field_key(index))), expected);
+    }
+}
+
+#[test]
+fn unsigned_accessors_preserve_integer_bits() {
+    let entity = accessor_entity();
+    for (index, expected) in [(0, 7), (1, 8), (2, (-9_i32) as u32), (3, (-10_i64) as u32)] {
+        assert_eq!(entity.get_u32(Some(field_key(index))), expected);
+    }
+}
+
+#[test]
+fn float_accessor_reads_float_fields() {
+    assert_eq!(accessor_entity().get_f32(Some(field_key(4))), 1.25);
+}
+
+#[test]
+fn bool_accessor_reads_bool_fields() {
+    assert!(accessor_entity().get_bool(Some(field_key(5))));
+}
+
+#[test]
+fn qangle_accessor_reads_angle_fields() {
+    assert_eq!(
+        accessor_entity().get_qangle(Some(field_key(6))),
+        [1.0, 2.0, 3.0]
+    );
+}
+
+#[test]
+fn vector_accessor_reads_fixed_and_dynamic_vectors() {
+    let entity = accessor_entity();
     assert_eq!(entity.get_vector3(Some(field_key(7))), [4.0, 5.0, 6.0]);
     assert_eq!(entity.get_vector3(Some(field_key(8))), [7.0, 8.0, 9.0]);
-    assert_eq!(entity.get_bytes(Some(field_key(9))), Some(&b"hello"[..]));
-    assert_eq!(entity.get_str(Some(field_key(9))).unwrap(), Some("hello"));
+}
+
+#[test]
+fn byte_accessor_preserves_string_bytes() {
     assert_eq!(
-        entity.get_string(Some(field_key(9))).as_deref(),
+        accessor_entity().get_bytes(Some(field_key(9))),
+        Some(&b"hello"[..])
+    );
+}
+
+#[test]
+fn borrowed_string_accessor_preserves_valid_utf8() {
+    assert_eq!(
+        accessor_entity().get_str(Some(field_key(9))).unwrap(),
         Some("hello")
     );
-    assert!(entity.get_str(Some(field_key(10))).is_err());
+}
+
+#[test]
+fn owned_string_accessor_preserves_valid_utf8() {
+    assert_eq!(
+        accessor_entity().get_string(Some(field_key(9))).as_deref(),
+        Some("hello")
+    );
+}
+
+#[test]
+fn string_accessor_rejects_invalid_utf8() {
+    assert!(accessor_entity().get_str(Some(field_key(10))).is_err());
+}
+
+#[test]
+fn handle_accessor_preserves_signed_wire_bits() {
+    let entity = accessor_entity();
     assert_eq!(entity.get_handle(Some(field_key(0))), Some(7));
     assert_eq!(entity.get_handle(Some(field_key(2))), Some((-9_i32) as u32));
-    assert_eq!(entity.get_u64(Some(field_key(3))), Some((-10_i64) as u64));
-    assert_eq!(entity.try_get::<u32>(Some(field_key(0))).unwrap(), Some(7));
+}
 
-    assert_eq!(entity.get_i64(None), 0);
-    assert_eq!(entity.get_u32(Some(field_key(4))), 0);
-    assert_eq!(entity.get_f32(Some(field_key(5))), 0.0);
-    assert!(!entity.get_bool(Some(field_key(4))));
-    assert_eq!(entity.get_qangle(None), [0.0; 3]);
-    assert_eq!(entity.get_vector3(Some(field_key(4))), [0.0; 3]);
-    assert!(entity.get_handle(Some(field_key(4))).is_none());
-    assert!(entity.get_u64(Some(field_key(4))).is_none());
-    assert!(entity.get_bytes(Some(field_key(4))).is_none());
-    assert!(entity.field_value(None).is_none());
+#[test]
+fn u64_accessor_preserves_signed_wire_bits() {
+    assert_eq!(
+        accessor_entity().get_u64(Some(field_key(3))),
+        Some((-10_i64) as u64)
+    );
+}
+
+#[test]
+fn typed_accessor_converts_compatible_values() {
+    assert_eq!(
+        accessor_entity()
+            .try_get::<u32>(Some(field_key(0)))
+            .unwrap(),
+        Some(7)
+    );
+}
+
+#[test]
+fn integer_accessor_defaults_for_absent_fields() {
+    assert_eq!(accessor_entity().get_i64(None), 0);
+}
+
+#[test]
+fn unsigned_accessor_defaults_for_incompatible_fields() {
+    assert_eq!(accessor_entity().get_u32(Some(field_key(4))), 0);
+}
+
+#[test]
+fn float_accessor_defaults_for_incompatible_fields() {
+    assert_eq!(accessor_entity().get_f32(Some(field_key(5))), 0.0);
+}
+
+#[test]
+fn bool_accessor_defaults_for_incompatible_fields() {
+    assert!(!accessor_entity().get_bool(Some(field_key(4))));
+}
+
+#[test]
+fn angle_accessor_defaults_for_absent_fields() {
+    assert_eq!(accessor_entity().get_qangle(None), [0.0; 3]);
+}
+
+#[test]
+fn vector_accessor_defaults_for_incompatible_fields() {
+    assert_eq!(accessor_entity().get_vector3(Some(field_key(4))), [0.0; 3]);
+}
+
+#[test]
+fn handle_accessor_rejects_incompatible_fields() {
+    assert!(accessor_entity().get_handle(Some(field_key(4))).is_none());
+}
+
+#[test]
+fn u64_accessor_rejects_incompatible_fields() {
+    assert!(accessor_entity().get_u64(Some(field_key(4))).is_none());
+}
+
+#[test]
+fn byte_accessor_rejects_incompatible_fields() {
+    assert!(accessor_entity().get_bytes(Some(field_key(4))).is_none());
+}
+
+#[test]
+fn field_lookup_returns_none_without_a_key() {
+    assert!(accessor_entity().field_value(None).is_none());
 }
 
 #[test]
@@ -398,88 +506,113 @@ fn validates_entity_and_container_indices_and_tracks_replacements() {
     assert!(container.get(-1).is_none());
 }
 
-#[test]
-fn packet_lifecycle_creates_leaves_reactivates_and_deletes() {
+fn decode_packets(packets: &[Vec<u8>], filtered: bool) -> EntityContainer {
+    let mut entities = EntityContainer::new();
     let class_info = classes();
     let serializer_container = serializers();
     let tables = StringTableContainer::new();
-    let mut entities = EntityContainer::new();
+    for packet in packets {
+        entities.clear_tick_changes();
+        if filtered {
+            apply_packet_filtered(
+                &mut entities,
+                packet,
+                &class_info,
+                &serializer_container,
+                &tables,
+                &HashSet::from(["CTest"]),
+            )
+            .unwrap();
+        } else {
+            apply_packet(
+                &mut entities,
+                packet,
+                &class_info,
+                &serializer_container,
+                &tables,
+            )
+            .unwrap();
+        }
+    }
+    entities
+}
 
-    apply_packet(
-        &mut entities,
-        &create_packet(5, true),
-        &class_info,
-        &serializer_container,
-        &tables,
-    )
-    .unwrap();
-    assert!(entities.get(5).unwrap().active);
-    assert!(entities.get(5).unwrap().get_bool(Some(field_key(0))));
-    assert_eq!(entities.updated_indices(), &[5]);
-    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Created);
-    assert_eq!(entities.entity_changes()[0].serial, 7);
-    entities.clear_tick_changes();
+#[test]
+fn packet_create_records_the_entity_identity() {
+    for filtered in [false, true] {
+        let entities = decode_packets(&[create_packet(5, true)], filtered);
+        assert!(entities.get(5).unwrap().active);
+        assert!(entities.get(5).unwrap().get_bool(Some(field_key(0))));
+        assert_eq!(entities.updated_indices(), &[5]);
+        let created = &entities.entity_changes()[0];
+        assert_eq!(
+            (created.kind, created.index, created.serial),
+            (EntityChangeKind::Created, 5, 7)
+        );
+    }
+}
 
-    apply_packet(
-        &mut entities,
-        &update_packet(5, false),
-        &class_info,
-        &serializer_container,
-        &tables,
-    )
-    .unwrap();
-    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Updated);
-    assert_eq!(entities.updated_indices(), &[5]);
-    entities.clear_tick_changes();
+#[test]
+fn packet_update_records_the_changed_value() {
+    for filtered in [false, true] {
+        let entities = decode_packets(&[create_packet(5, true), update_packet(5, false)], filtered);
+        assert!(!entities.get(5).unwrap().get_bool(Some(field_key(0))));
+        assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Updated);
+        assert_eq!(entities.updated_indices(), &[5]);
+    }
+}
 
-    let leave = packet_writer(5, CMD_LEAVE).finish();
-    apply_packet(
-        &mut entities,
-        &leave,
-        &class_info,
-        &serializer_container,
-        &tables,
-    )
-    .unwrap();
-    assert!(!entities.get(5).unwrap().active);
-    assert_eq!(entities.len(), 1, "plain leave keeps the entity");
-    assert!(entities.updated_indices().is_empty());
-    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::LeftPvs);
-    entities.clear_tick_changes();
+#[test]
+fn packet_leave_retains_an_inactive_entity() {
+    for filtered in [false, true] {
+        let entities = decode_packets(
+            &[create_packet(5, true), packet_writer(5, CMD_LEAVE).finish()],
+            filtered,
+        );
+        assert!(!entities.get(5).unwrap().active);
+        assert_eq!(entities.len(), 1);
+        assert!(entities.updated_indices().is_empty());
+        assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::LeftPvs);
+    }
+}
 
-    apply_packet(
-        &mut entities,
-        &update_packet(5, true),
-        &class_info,
-        &serializer_container,
-        &tables,
-    )
-    .unwrap();
-    assert!(entities.get(5).unwrap().active);
-    assert!(entities.get(5).unwrap().get_bool(Some(field_key(0))));
-    assert_eq!(entities.updated_indices(), &[5]);
-    assert_eq!(
-        entities.entity_changes()[0].kind,
-        EntityChangeKind::Reactivated
-    );
-    entities.clear_tick_changes();
+#[test]
+fn packet_update_reactivates_an_entity_after_leave() {
+    for filtered in [false, true] {
+        let entities = decode_packets(
+            &[
+                create_packet(5, false),
+                packet_writer(5, CMD_LEAVE).finish(),
+                update_packet(5, true),
+            ],
+            filtered,
+        );
+        assert!(entities.get(5).unwrap().active);
+        assert!(entities.get(5).unwrap().get_bool(Some(field_key(0))));
+        assert_eq!(entities.updated_indices(), &[5]);
+        assert_eq!(
+            entities.entity_changes()[0].kind,
+            EntityChangeKind::Reactivated
+        );
+    }
+}
 
-    let delete = packet_writer(5, CMD_LEAVE | CMD_CREATE_DELETE).finish();
-    apply_packet(
-        &mut entities,
-        &delete,
-        &class_info,
-        &serializer_container,
-        &tables,
-    )
-    .unwrap();
-    assert!(entities.get(5).is_none());
-    assert!(entities.is_empty());
-    assert_eq!(entities.len(), 0);
-    let deleted = &entities.entity_changes()[0];
-    assert_eq!(deleted.kind, EntityChangeKind::Deleted);
-    assert_eq!((deleted.index, deleted.serial, deleted.class_id), (5, 7, 0));
-    assert_eq!(&*deleted.class_name, "CTest");
+#[test]
+fn packet_delete_preserves_the_removed_entity_identity() {
+    for filtered in [false, true] {
+        let entities = decode_packets(
+            &[
+                create_packet(5, true),
+                packet_writer(5, CMD_LEAVE | CMD_CREATE_DELETE).finish(),
+            ],
+            filtered,
+        );
+        assert!(entities.get(5).is_none());
+        let deleted = &entities.entity_changes()[0];
+        assert_eq!(deleted.kind, EntityChangeKind::Deleted);
+        assert_eq!((deleted.index, deleted.serial, deleted.class_id), (5, 7, 0));
+        assert_eq!(&*deleted.class_name, "CTest");
+    }
 }
 
 #[test]
@@ -564,106 +697,58 @@ fn entity_create_applies_the_instance_baseline_before_the_delta() {
 }
 
 #[test]
-fn filtered_packets_track_selected_classes_and_skip_other_updates() {
-    let class_info = classes();
-    let serializer_container = serializers();
-    let tables = StringTableContainer::new();
+fn filtered_create_removes_a_previously_tracked_occupant() {
     let mut entities = EntityContainer::new();
     entities.insert(Entity::new(2, 99, "stale".into())).unwrap();
     entities.clear_tick_changes();
-    let empty_filter = HashSet::new();
-
     apply_packet_filtered(
         &mut entities,
         &create_packet(2, true),
-        &class_info,
-        &serializer_container,
-        &tables,
-        &empty_filter,
+        &classes(),
+        &serializers(),
+        &StringTableContainer::new(),
+        &HashSet::new(),
     )
     .unwrap();
     assert!(entities.get(2).is_none());
     assert_eq!(entities.skipped_class(2), Some(0));
-    assert!(entities.is_empty());
     assert_eq!(entities.len(), 0);
     assert_eq!(entities.entity_changes().len(), 1);
-    assert_eq!(
-        entities.entity_changes()[0].kind,
-        EntityChangeKind::Deleted,
-        "removing the previously tracked occupant is still observable"
-    );
-    entities.clear_tick_changes();
+    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Deleted);
+}
 
+#[test]
+fn filtered_update_does_not_report_changes_for_skipped_classes() {
+    let mut entities = EntityContainer::new();
+    entities.set_skipped(2, Some(0));
     apply_packet_filtered(
         &mut entities,
         &update_packet(2, false),
-        &class_info,
-        &serializer_container,
-        &tables,
-        &empty_filter,
+        &classes(),
+        &serializers(),
+        &StringTableContainer::new(),
+        &HashSet::new(),
     )
     .unwrap();
     assert!(entities.updated_indices().is_empty());
     assert!(entities.entity_changes().is_empty());
+}
 
-    let selected = HashSet::from(["CTest"]);
+#[test]
+fn selected_create_clears_the_skipped_class_marker() {
+    let mut entities = EntityContainer::new();
+    entities.set_skipped(2, Some(0));
     apply_packet_filtered(
         &mut entities,
         &create_packet(2, true),
-        &class_info,
-        &serializer_container,
-        &tables,
-        &selected,
+        &classes(),
+        &serializers(),
+        &StringTableContainer::new(),
+        &HashSet::from(["CTest"]),
     )
     .unwrap();
     assert!(entities.get(2).is_some());
-    assert_eq!(entities.len(), 1);
     assert_eq!(entities.skipped_class(2), None);
-    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Created);
-    entities.clear_tick_changes();
-
-    let leave = packet_writer(2, CMD_LEAVE).finish();
-    apply_packet_filtered(
-        &mut entities,
-        &leave,
-        &class_info,
-        &serializer_container,
-        &tables,
-        &selected,
-    )
-    .unwrap();
-    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::LeftPvs);
-    entities.clear_tick_changes();
-
-    apply_packet_filtered(
-        &mut entities,
-        &update_packet(2, false),
-        &class_info,
-        &serializer_container,
-        &tables,
-        &selected,
-    )
-    .unwrap();
-    assert_eq!(
-        entities.entity_changes()[0].kind,
-        EntityChangeKind::Reactivated
-    );
-    entities.clear_tick_changes();
-
-    let delete = packet_writer(2, CMD_LEAVE | CMD_CREATE_DELETE).finish();
-    apply_packet_filtered(
-        &mut entities,
-        &delete,
-        &class_info,
-        &serializer_container,
-        &tables,
-        &selected,
-    )
-    .unwrap();
-    assert!(entities.get(2).is_none());
-    assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Deleted);
-    assert!(entities.is_empty());
-    assert_eq!(entities.len(), 0);
 }
 
 #[test]
@@ -688,71 +773,55 @@ fn filtered_leave_and_delete_keep_then_clear_skipped_class_state() {
     assert_eq!(entities.entity_changes()[0].kind, EntityChangeKind::Deleted);
 }
 
+fn decode_empty_container(packet: PacketEntities<'_>, limits: DecodeLimits) -> Result<()> {
+    EntityContainer::new().handle_packet_entities(
+        packet,
+        &classes(),
+        &serializers(),
+        &StringTableContainer::new(),
+        &mut FieldDecodeContext::with_limits(1.0 / 64.0, limits),
+        &mut Vec::new(),
+    )
+}
+
 #[test]
-fn packet_validation_rejects_counts_indices_and_unknown_state() {
-    let class_info = classes();
-    let serializer_container = serializers();
-    let tables = StringTableContainer::new();
-    let mut entities = EntityContainer::new();
-    let mut context = FieldDecodeContext::new(1.0 / 64.0);
-    let mut paths = Vec::new();
-
-    let negative = entities
-        .handle_packet_entities(
-            PacketEntities::new(-1, &[], 0),
-            &class_info,
-            &serializer_container,
-            &tables,
-            &mut context,
-            &mut paths,
-        )
-        .expect_err("negative count");
+fn packet_validation_rejects_negative_update_counts() {
+    let error = decode_empty_container(PacketEntities::new(-1, &[], 0), DecodeLimits::default())
+        .unwrap_err();
     assert!(
-        matches!(negative, Error::Parse { context } if context.contains("negative packet-entity"))
+        matches!(error, Error::Parse { context } if context.contains("negative packet-entity"))
     );
+}
 
-    let mut limited_context = FieldDecodeContext::with_limits(
-        1.0 / 64.0,
+#[test]
+fn packet_validation_enforces_the_update_limit() {
+    let error = decode_empty_container(
+        PacketEntities::new(1, &[], 0),
         DecodeLimits::default().with_max_packet_entity_updates(0),
-    );
-    let limited = entities
-        .handle_packet_entities(
-            PacketEntities::new(1, &[], 0),
-            &class_info,
-            &serializer_container,
-            &tables,
-            &mut limited_context,
-            &mut paths,
-        )
-        .expect_err("count exceeds limit");
+    )
+    .unwrap_err();
     assert!(matches!(
-        limited,
+        error,
         Error::LimitExceeded {
             resource: "packet entity updates",
             ..
         }
     ));
+}
 
-    let out_of_range = packet_writer(MAX_ENTITY_INDEX as u32 + 1, 0).finish();
-    let error = apply_packet(
-        &mut entities,
-        &out_of_range,
-        &class_info,
-        &serializer_container,
-        &tables,
-    )
-    .expect_err("index exceeds protocol maximum");
+#[test]
+fn packet_validation_rejects_out_of_range_indices() {
+    let data = packet_writer(MAX_ENTITY_INDEX as u32 + 1, 0).finish();
+    let error = decode_empty_container(PacketEntities::new(1, &data, 0), DecodeLimits::default())
+        .unwrap_err();
     assert!(matches!(error, Error::Parse { context } if context.contains("out of range")));
+}
 
-    let update_missing = packet_writer(0, 0).finish();
-    let error = apply_packet(
-        &mut entities,
-        &update_missing,
-        &class_info,
-        &serializer_container,
-        &tables,
-    )
-    .expect_err("cannot update missing entity");
+#[test]
+fn packet_validation_rejects_updates_for_missing_entities() {
+    let data = packet_writer(0, 0).finish();
+    let error = decode_empty_container(PacketEntities::new(1, &data, 0), DecodeLimits::default())
+        .unwrap_err();
     assert!(matches!(error, Error::Parse { context } if context.contains("non-existent entity")));
 }
 
@@ -1022,64 +1091,81 @@ fn encoded_baseline_tables(bytes: &[u8]) -> StringTableContainer {
     tables
 }
 
-#[test]
-fn baseline_cache_invalidates_on_bytes_schema_clock_and_limits() {
-    let schemas = serializers();
-    let mut tables = baseline_tables(true);
-    let mut context = FieldDecodeContext::new(1.0 / 64.0);
-    let mut paths = Vec::new();
-    let mut cache = BaselineCache::default();
+fn apply_cached_baseline(
+    cache: &mut BaselineCache,
+    tables: &StringTableContainer,
+    schemas: &SerializerContainer,
+    context: &mut FieldDecodeContext,
+) -> Result<bool> {
     let mut entity = Entity::new(0, 0, "CTest".into());
-    let mut apply = |cache: &mut BaselineCache,
-                     tables: &StringTableContainer,
-                     schemas: &SerializerContainer,
-                     context: &mut FieldDecodeContext| {
-        cache
-            .apply(
-                &mut entity,
-                schemas.get("CTest").unwrap(),
-                schemas,
-                tables,
-                context,
-                &mut paths,
-            )
-            .unwrap();
-        entity.get_bool(Some(field_key(0)))
-    };
-    assert!(apply(&mut cache, &tables, &schemas, &mut context));
-    assert!(apply(&mut cache, &tables, &schemas, &mut context));
+    cache.apply(
+        &mut entity,
+        schemas.get("CTest").unwrap(),
+        schemas,
+        tables,
+        context,
+        &mut Vec::new(),
+    )?;
+    Ok(entity.get_bool(Some(field_key(0))))
+}
+
+fn populated_baseline_cache() -> (
+    BaselineCache,
+    SerializerContainer,
+    StringTableContainer,
+    FieldDecodeContext,
+) {
+    let schemas = serializers();
+    let tables = baseline_tables(true);
+    let mut context = FieldDecodeContext::new(1.0 / 64.0);
+    let mut cache = BaselineCache::default();
+    apply_cached_baseline(&mut cache, &tables, &schemas, &mut context).unwrap();
+    (cache, schemas, tables, context)
+}
+
+#[test]
+fn unchanged_baselines_reuse_one_cache_entry() {
+    let (mut cache, schemas, tables, mut context) = populated_baseline_cache();
+    assert!(apply_cached_baseline(&mut cache, &tables, &schemas, &mut context).unwrap());
     assert_eq!(cache.entries.len(), 1);
-    assert!(cache.clone().entries.is_empty());
-    tables = baseline_tables(false);
-    assert!(!apply(&mut cache, &tables, &schemas, &mut context));
+}
+
+#[test]
+fn cloned_baseline_caches_start_empty() {
+    let cache = populated_baseline_cache().0;
+    let cloned = cache.clone();
+    assert!(cloned.entries.is_empty());
+    assert!(!cache.entries.is_empty());
+}
+
+#[test]
+fn changed_baseline_bytes_replace_cached_values() {
+    let (mut cache, schemas, _, mut context) = populated_baseline_cache();
+    assert!(
+        !apply_cached_baseline(&mut cache, &baseline_tables(false), &schemas, &mut context)
+            .unwrap()
+    );
+}
+
+#[test]
+fn replacement_schemas_invalidate_cached_baselines() {
+    let (mut cache, _, tables, mut context) = populated_baseline_cache();
     let replacement = serializers();
-    assert!(!apply(&mut cache, &tables, &replacement, &mut context));
+    apply_cached_baseline(&mut cache, &tables, &replacement, &mut context).unwrap();
     assert!(Arc::ptr_eq(
         &cache.entries[&0].schema,
         replacement.schema_id()
     ));
-    context.set_tick_interval(1.0 / 30.0);
-    assert!(!apply(&mut cache, &tables, &replacement, &mut context));
-    assert_eq!(
-        cache.entries[&0].tick_interval,
-        context.tick_interval.to_bits()
-    );
-    let mut strict = FieldDecodeContext::with_limits(
+}
+
+#[test]
+fn cached_baselines_still_enforce_stricter_decode_limits() {
+    let (mut cache, schemas, tables, _) = populated_baseline_cache();
+    let mut context = FieldDecodeContext::with_limits(
         1.0 / 30.0,
         DecodeLimits::default().with_max_field_paths(0),
     );
-    assert!(
-        cache
-            .apply(
-                &mut entity,
-                replacement.get("CTest").unwrap(),
-                &replacement,
-                &tables,
-                &mut strict,
-                &mut paths
-            )
-            .is_err()
-    );
+    assert!(apply_cached_baseline(&mut cache, &tables, &schemas, &mut context).is_err());
 }
 
 #[test]

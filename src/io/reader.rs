@@ -155,14 +155,26 @@ impl<'a> ByteReader<'a> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn oversized_read_and_skip_preserve_cursor() {
+    fn reader_after_first_byte() -> ByteReader<'static> {
         let mut reader = ByteReader::new(&[1, 2, 3]);
         reader.skip(1).unwrap();
+        reader
+    }
+
+    #[test]
+    fn oversized_read_preserves_the_cursor() {
+        let mut reader = reader_after_first_byte();
         assert!(matches!(
             reader.read_bytes(usize::MAX),
             Err(Error::Overflow { .. })
         ));
+        assert_eq!(reader.position(), 1);
+        assert_eq!(reader.read_u8().unwrap(), 2);
+    }
+
+    #[test]
+    fn oversized_skip_preserves_the_cursor() {
+        let mut reader = reader_after_first_byte();
         assert!(matches!(
             reader.skip(usize::MAX),
             Err(Error::Overflow { .. })

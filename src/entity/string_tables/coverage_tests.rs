@@ -286,69 +286,74 @@ fn full_updates_extend_tables_and_refresh_instance_baselines() {
 }
 
 #[test]
-fn rejects_negative_identifiers_and_counts() {
-    let mut container = StringTableContainer::new();
-    let create_error = container
+fn create_rejects_negative_entry_counts() {
+    let error = StringTableContainer::new()
         .handle_create(CreateStringTable::new("bad", -1, Vec::new()))
-        .expect_err("negative count is invalid");
+        .unwrap_err();
     assert!(
-        matches!(create_error, Error::Parse { context } if context.contains("negative string-table entry count"))
-    );
-
-    let update_error = container
-        .handle_update(UpdateStringTable::new(-1, 0, Vec::new()))
-        .expect_err("negative table ID is invalid");
-    assert!(
-        matches!(update_error, Error::Parse { context } if context.contains("negative string table ID"))
+        matches!(error, Error::Parse { context } if context.contains("negative string-table entry count"))
     );
 }
 
 #[test]
-fn enforces_table_entry_data_and_snapshot_limits() {
-    let entry_limits = DecodeLimits::default().with_max_string_table_entries(0);
-    let mut container = StringTableContainer::new();
-    let entry_error = container
-        .handle_create_with_limits(
-            CreateStringTable::new("limited", 1, Vec::new()),
-            &entry_limits,
-        )
-        .expect_err("entry count exceeds limit");
+fn update_rejects_negative_table_identifiers() {
+    let error = StringTableContainer::new()
+        .handle_update(UpdateStringTable::new(-1, 0, Vec::new()))
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Parse { context } if context.contains("negative string table ID"))
+    );
+}
+
+#[test]
+fn create_enforces_the_table_entry_limit() {
+    let limits = DecodeLimits::default().with_max_string_table_entries(0);
+    let error = StringTableContainer::new()
+        .handle_create_with_limits(CreateStringTable::new("limited", 1, Vec::new()), &limits)
+        .unwrap_err();
     assert!(matches!(
-        entry_error,
+        error,
         Error::LimitExceeded {
             resource: "string table entries",
             limit: 0,
             actual: 1
         }
     ));
+}
 
-    let data_limits = DecodeLimits::default().with_max_string_table_bytes(0, 0);
-    let data_error = container
-        .handle_create_with_limits(CreateStringTable::new("limited", 0, vec![0]), &data_limits)
-        .expect_err("encoded data exceeds limit");
+#[test]
+fn create_enforces_the_encoded_data_limit() {
+    let limits = DecodeLimits::default().with_max_string_table_bytes(0, 0);
+    let error = StringTableContainer::new()
+        .handle_create_with_limits(CreateStringTable::new("limited", 0, vec![0]), &limits)
+        .unwrap_err();
     assert!(matches!(
-        data_error,
+        error,
         Error::LimitExceeded {
             resource: "string-table data",
             limit: 0,
             actual: 1
         }
     ));
+}
 
+#[test]
+fn full_updates_enforce_the_snapshot_entry_limit() {
+    let mut container = StringTableContainer::new();
     container
         .handle_create(CreateStringTable::new("snapshot", 0, Vec::new()))
         .unwrap();
-    let snapshot_error = container
+    let error = container
         .do_full_update_with_limits(
             [(
                 "snapshot".to_owned(),
                 vec![StringTableEntry::new(None, None)],
             )],
-            &entry_limits,
+            &DecodeLimits::default().with_max_string_table_entries(0),
         )
-        .expect_err("snapshot exceeds limit");
+        .unwrap_err();
     assert!(matches!(
-        snapshot_error,
+        error,
         Error::LimitExceeded {
             resource: "full string-table entries",
             limit: 0,
@@ -358,26 +363,28 @@ fn enforces_table_entry_data_and_snapshot_limits() {
 }
 
 #[test]
-fn rejects_invalid_compressed_payloads_and_oversized_fixed_data() {
-    let mut container = StringTableContainer::new();
-    let compressed_error = container
+fn create_rejects_invalid_compressed_payloads() {
+    let error = StringTableContainer::new()
         .handle_create(
             CreateStringTable::new("compressed", 0, vec![1, 2, 3]).with_compressed_data(),
         )
-        .expect_err("invalid Snappy data");
-    assert!(matches!(compressed_error, Error::Decompress(_)));
+        .unwrap_err();
+    assert!(matches!(error, Error::Decompress(_)));
+}
 
+#[test]
+fn create_rejects_oversized_fixed_user_data() {
     let mut writer = BitWriter::default();
     writer.push_bool(true);
     writer.push_bool(false);
     writer.push_bool(true);
-    let fixed_error = container
+    let error = StringTableContainer::new()
         .handle_create(
             CreateStringTable::new("fixed", 1, writer.finish())
                 .with_fixed_user_data((MAX_USERDATA_SIZE + 1) as i32, 8),
         )
-        .expect_err("fixed data exceeds parser buffer");
-    assert!(matches!(fixed_error, Error::Parse { context } if context.contains("fixed user data")));
+        .unwrap_err();
+    assert!(matches!(error, Error::Parse { context } if context.contains("fixed user data")));
 }
 
 #[test]
