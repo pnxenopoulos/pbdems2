@@ -12,6 +12,7 @@ mod entities;
 mod field_decoder;
 pub mod field_path;
 mod field_value;
+mod properties;
 mod quantized_float;
 mod serializer_bindings;
 mod serializers;
@@ -27,6 +28,7 @@ pub use field_decoder::{
     FieldSpecialDescriptor, PreciseQAngleMode, get_field_metadata,
 };
 pub use field_value::FieldValue;
+pub use properties::PropertyFilter;
 pub use quantized_float::QuantizedFloat;
 pub use serializers::{
     FieldType, FlattenedField, FlattenedSerializer, FlattenedSerializerDefinition, Serializer,

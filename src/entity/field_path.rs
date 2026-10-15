@@ -146,6 +146,13 @@ impl FieldPath {
             })
     }
 
+    // Mask the components of a valid packed path, excluding depth and children.
+    pub(super) fn prefix_mask(key: u64) -> u64 {
+        let depth = (key >> 61) as usize;
+        let shift = COMPONENT_SHIFTS.get(depth + 1).copied().unwrap_or(61);
+        (1_u64 << shift) - 1
+    }
+
     // Compare only the parent's packed prefix and its immediate child index.
     // This is equivalent to unpacking every stored path when a vector shrinks
     // or a pointer clears, but does not reconstruct seven components per field.

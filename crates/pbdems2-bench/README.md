@@ -93,6 +93,9 @@ See [RESULTS.md](RESULTS.md) for the first refactor and
 [RELEASE_0.3.2.md](RELEASE_0.3.2.md) checks the final candidate against published
 0.3.1, including retained safety guards and small lookup tradeoffs.
 
+[RELEASE_0.4.1.md](RELEASE_0.4.1.md) measures property filtering and full-decoding
+controls.
+
 [RELEASE_0.4.0.md](RELEASE_0.4.0.md) measures the correctness fixes and decoded
 baseline cache, including remaining performance costs.
 
@@ -104,3 +107,13 @@ outside this crate's microbenchmarks and CI. The
 class bindings, and Awpy column output.
 The [separate-build follow-up](real-world/NATIVE.md) verifies those changes with
 native feature sets, allocation diagnostics, and a wider demo corpus.
+
+## Property filtering
+
+Run `cargo bench -p pbdems2-bench --bench entity_pipeline -- projected_entities`
+to compare full and selected-property updates. Each case consumes the same
+packets. The selected case retains two scalar fields; full decoding retains all
+30 mixed fields. The unlisted case keeps every field with a filter for another
+class. Flat and nested layouts include empty or 128-byte strings.
+Keep the existing `mixed_entities` and `packet_entities` cases as full-decoding
+controls when changing the filter implementation.

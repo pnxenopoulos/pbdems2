@@ -543,6 +543,46 @@ impl<'a> BitReader<'a> {
         Ok(())
     }
 
+    /// Skip a null-terminated string with the same byte limit as a decoded string.
+    #[inline]
+    pub fn skip_string_limited(&mut self, max_bytes: usize) -> Result<()> {
+        // Preserve the empty-string path without a limit check. After one byte,
+        // a valid string cannot exceed the limit if the rest of the packet fits.
+        if self.read_u8()? == 0 {
+            return Ok(());
+        }
+        if self.bits_remaining() / 8 < max_bytes {
+            return self.skip_string();
+        }
+        self.skip_string_bounded(max_bytes)
+    }
+
+    // Keep uncommon large-packet limit checks out of the small-packet loop.
+    #[cold]
+    fn skip_string_bounded(&mut self, max_bytes: usize) -> Result<()> {
+        if max_bytes == 0 {
+            return Err(Error::LimitExceeded {
+                resource: "decoded field string",
+                limit: 0,
+                actual: 1,
+            });
+        }
+        let mut length = 1_usize;
+        loop {
+            if self.read_u8()? == 0 {
+                return Ok(());
+            }
+            if length == max_bytes {
+                return Err(Error::LimitExceeded {
+                    resource: "decoded field string",
+                    limit: max_bytes,
+                    actual: length.saturating_add(1),
+                });
+            }
+            length += 1;
+        }
+    }
+
     /// Skip a null-terminated string.
     pub fn skip_string(&mut self) -> Result<()> {
         loop {
@@ -563,6 +603,35 @@ fn mask(n: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limited_string_skip_matches_read_errors_and_cursor() {
+        for alignment in 0..8 {
+            for length in 0..20 {
+                for terminated in [false, true] {
+                    let mut bits = crate::test_utils::BitWriter::default();
+                    bits.push_bits(0, alignment);
+                    bits.push_bytes(&vec![b'x'; length]);
+                    if terminated {
+                        bits.push_bits(0, 8);
+                    }
+                    let data = bits.finish();
+                    for limit in [0, 1, 3, 8, 20, usize::MAX] {
+                        let mut read = BitReader::new(&data);
+                        let mut skip = BitReader::new(&data);
+                        read.skip_bits(alignment).unwrap();
+                        skip.skip_bits(alignment).unwrap();
+                        let expected = read
+                            .read_string_raw_limited(&mut Vec::new(), limit)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let actual = skip.skip_string_limited(limit).map_err(|e| e.to_string());
+                        assert_eq!((actual, skip.position()), (expected, read.position()));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn oversized_skip_preserves_cursor() {

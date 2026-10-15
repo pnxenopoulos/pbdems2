@@ -168,8 +168,10 @@ impl<'state, 'filter> CommandContext<'state, 'filter> {
         serializers: FlattenedSerializer,
         profile: DecodeProfile,
     ) -> Result<()> {
-        self.state.serializers =
+        let serializers =
             SerializerContainer::parse_with_limits(serializers, profile, &self.limits)?;
+        self.state.entities.validate_properties(&serializers)?;
+        self.state.serializers = serializers;
         self.state.has_serializers = true;
         Ok(())
     }

@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use crate::PropertyFilter;
 use crate::demo::DemoIndex;
 use crate::error::Error;
 use crate::limits::DecodeLimits;
@@ -141,6 +142,25 @@ impl<A: CheckpointAdapter> PreparedPlayback<A> {
             state: self.initial_state.clone(),
             adapter: A::from_checkpoint(&self.adapter_checkpoint),
         })
+    }
+    /// Create an independent session with a fixed property selection.
+    ///
+    /// Compile the filter from [`Self::initial_state`]'s serializers. Initial
+    /// entities, baselines, deltas, seeks, segments, and checkpoints all retain
+    /// the same selection. Omitted values cannot be recovered by widening it;
+    /// create a new session instead. Unlisted classes remain fully decoded.
+    pub fn session_with_properties<'demo, 'prepared>(
+        &'prepared self,
+        parser: DemoParser<'demo>,
+        properties: PropertyFilter,
+    ) -> std::result::Result<PlaybackSession<'demo, 'prepared, A>, A::Error> {
+        let mut session = self.session(parser)?;
+        session
+            .state
+            .entities
+            .project_properties(properties, &session.state.serializers)
+            .map_err(A::Error::from)?;
+        Ok(session)
     }
 }
 
@@ -1069,3 +1089,6 @@ mod tests {
         assert_eq!(results, [vec![1, 2, 3, 4], vec![1, 2, 3, 4]]);
     }
 }
+
+#[cfg(test)]
+mod property_tests;

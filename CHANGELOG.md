@@ -2,6 +2,12 @@
 
 Notable pbdems2 changes live here.
 
+## v0.4.1
+
+- Add immutable property filters for individual fields and nested subtrees. Use `PreparedPlayback::session_with_properties` or `EntityContainer::with_properties`.
+- Use the same filter for initial state, baselines, deltas, seeks, segments, and checkpoints. Reject a different serializer schema. Keep full decoding on a separate path.
+- Enforce string and binary-block limits when skipping values. Preserve 32-bit varint widths.
+
 ## v0.4.0
 
 - **Rust API change:** Use `[i16; 7]` field-path components and a new compact key layout. Resolve cached field keys again after an upgrade.

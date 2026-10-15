@@ -11,6 +11,7 @@ use super::class_info::ClassInfo;
 use super::field_decoder::FieldDecodeContext;
 use super::field_path::{self, FieldPath};
 use super::field_value::FieldValue;
+use super::properties::{ClassProperties, PropertyFilter};
 use super::serializer_bindings::SerializerBindings;
 use super::serializers::{Serializer, SerializerContainer, SerializerField};
 use super::string_tables::StringTableContainer;
@@ -87,7 +88,7 @@ pub fn protobuf_handle_index(handle: Option<u32>) -> Option<i32> {
 /// past its serializer's fields — which is the tell-tale symptom of a bitstream
 /// desync (a corrupted field path addresses a nonexistent field), so surfacing
 /// it as an error keeps a bad decode from taking down the whole parse.
-fn resolve_field_path<'a>(
+pub(super) fn resolve_field_path<'a>(
     serializer: &'a Serializer,
     fp: &FieldPath,
 ) -> Result<&'a SerializerField> {
@@ -276,13 +277,18 @@ impl Entity {
 
     /// Apply field path deltas from a bit reader using the given serializer.
     #[allow(clippy::needless_range_loop)]
-    fn apply_update(
+    fn apply_update<const PROJECTED: bool>(
         &mut self,
         br: &mut BitReader,
         serializer: &Serializer,
         ctx: &mut FieldDecodeContext,
         fp_buf: &mut Vec<FieldPath>,
+        properties: Option<&ClassProperties>,
     ) -> Result<()> {
+        // Mixed sessions keep unlisted classes on the full field loop too.
+        if PROJECTED && properties.is_none() {
+            return self.apply_update::<false>(br, serializer, ctx, fp_buf, None);
+        }
         let limits = ctx.limits();
         field_path::read_field_paths_with_limits(br, fp_buf, &limits)?;
 
@@ -290,6 +296,12 @@ impl Entity {
             let field = resolve_field_path(serializer, &fp_buf[fp_idx])?;
 
             let key = fp_buf[fp_idx].pack_decoded();
+            if PROJECTED && properties.is_some_and(|selected| !selected.retains(key, field)) {
+                field.metadata.decoder.skip(ctx, br).map_err(|error| Error::Parse {
+                    context: format!("skipped field #{fp_idx} key={key:#x} (type: {}, decoder: {:?}, pos: {}, remaining: {}): {error}", field.var_type, field.metadata.decoder, br.position(), br.bits_remaining()),
+                })?;
+                continue;
+            }
             let value = field
                 .metadata
                 .decoder
@@ -331,7 +343,13 @@ impl Entity {
             if let Some(cutoff) = cutoff {
                 self.remove_descendants(key, cutoff);
             }
-            self.fields.insert(key, value);
+            // Separate insertion forms keep LLVM from outlining HashMap::insert
+            // in the full decoder when it specializes both update loops.
+            if PROJECTED {
+                self.fields.entry(key).insert_entry(value);
+            } else {
+                self.fields.insert(key, value);
+            }
         }
 
         Ok(())
@@ -577,7 +595,8 @@ struct CachedBaseline {
 }
 
 impl BaselineCache {
-    fn apply(
+    #[allow(clippy::too_many_arguments)]
+    fn apply<const PROJECTED: bool>(
         &mut self,
         entity: &mut Entity,
         serializer: &Serializer,
@@ -585,6 +604,7 @@ impl BaselineCache {
         tables: &StringTableContainer,
         ctx: &mut FieldDecodeContext,
         paths: &mut Vec<FieldPath>,
+        properties: Option<&ClassProperties>,
     ) -> Result<()> {
         let Some(bytes) = tables.instance_baseline(entity.class_id) else {
             return Ok(());
@@ -603,7 +623,13 @@ impl BaselineCache {
             entry => {
                 let mut baseline = Entity::new(0, entity.class_id, Arc::clone(&entity.class_name));
                 baseline.fields.reserve(serializer.fields.len());
-                baseline.apply_update(&mut BitReader::new(bytes), serializer, ctx, paths)?;
+                baseline.apply_update::<PROJECTED>(
+                    &mut BitReader::new(bytes),
+                    serializer,
+                    ctx,
+                    paths,
+                    properties,
+                )?;
                 let baseline = CachedBaseline {
                     schema: Arc::clone(serializers.schema_id()),
                     revision: Arc::clone(tables.baseline_revision()),
@@ -631,6 +657,8 @@ impl BaselineCache {
 pub struct EntityContainer {
     serializer_bindings: SerializerBindings,
     baseline_cache: BaselineCache,
+    // Fixed for the container's lifetime; clones/checkpoints retain this selection.
+    properties: Option<PropertyFilter>,
     /// Active (and dormant) entities, indexed **directly by entity index** — a
     /// dense slot array rather than a hash map, so every `get` / `get_mut` /
     /// `get_by_handle` (which fire on essentially every entity update) is a
@@ -653,6 +681,43 @@ impl EntityContainer {
     /// Create an empty container with no entity slots reserved.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create an empty container with a fixed property selection.
+    ///
+    /// Baselines and deltas use the same selection. A different serializer schema
+    /// is rejected. Use a fresh container to change the filter.
+    pub fn with_properties(properties: PropertyFilter) -> Self {
+        Self {
+            properties: Some(properties),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn project_properties(
+        &mut self,
+        properties: PropertyFilter,
+        serializers: &SerializerContainer,
+    ) -> Result<()> {
+        properties.validate(serializers)?;
+        if self.properties.is_some() {
+            return Err(Error::Parse {
+                context: "cannot change a property filter on existing entity state".into(),
+            });
+        }
+        for entity in self.entities.iter_mut().flatten() {
+            properties.retain_entity(entity);
+        }
+        self.baseline_cache = BaselineCache::default();
+        self.properties = Some(properties);
+        Ok(())
+    }
+
+    pub(crate) fn validate_properties(&self, serializers: &SerializerContainer) -> Result<()> {
+        if let Some(properties) = &self.properties {
+            properties.validate(serializers)?;
+        }
+        Ok(())
     }
 
     /// Resize the dense slot array to `slot_count` entries.
@@ -801,19 +866,32 @@ impl EntityContainer {
         field_decode_ctx: &mut FieldDecodeContext,
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
-        self.handle_packet_entities_impl::<false>(
-            msg,
-            class_info,
-            serializers,
-            string_tables,
-            field_decode_ctx,
-            None,
-            fp_buf,
-        )
+        if self.properties.is_some() {
+            self.validate_properties(serializers)?;
+            self.handle_packet_entities_impl::<false, true>(
+                msg,
+                class_info,
+                serializers,
+                string_tables,
+                field_decode_ctx,
+                None,
+                fp_buf,
+            )
+        } else {
+            self.handle_packet_entities_impl::<false, false>(
+                msg,
+                class_info,
+                serializers,
+                string_tables,
+                field_decode_ctx,
+                None,
+                fp_buf,
+            )
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn handle_packet_entities_impl<const FILTERED: bool>(
+    fn handle_packet_entities_impl<const FILTERED: bool, const PROJECTED: bool>(
         &mut self,
         msg: PacketEntities<'_>,
         class_info: &ClassInfo,
@@ -856,7 +934,7 @@ impl EntityContainer {
 
             if cmd & CMD_LEAVE == 0 {
                 if cmd & CMD_CREATE_DELETE != 0 {
-                    self.handle_create(
+                    self.handle_create::<PROJECTED>(
                         entity_index,
                         &mut br,
                         class_info,
@@ -876,7 +954,7 @@ impl EntityContainer {
                         continue;
                     }
                     if FILTERED {
-                        self.handle_update_filtered(
+                        self.handle_update_filtered::<PROJECTED>(
                             entity_index,
                             &mut br,
                             class_info,
@@ -885,7 +963,7 @@ impl EntityContainer {
                             fp_buf,
                         )?;
                     } else {
-                        self.handle_update(
+                        self.handle_update::<PROJECTED>(
                             entity_index,
                             &mut br,
                             serializers,
@@ -947,15 +1025,28 @@ impl EntityContainer {
         class_filter: &HashSet<&str>,
         fp_buf: &mut Vec<FieldPath>,
     ) -> Result<()> {
-        self.handle_packet_entities_impl::<true>(
-            msg,
-            class_info,
-            serializers,
-            string_tables,
-            field_decode_ctx,
-            Some(class_filter),
-            fp_buf,
-        )
+        if self.properties.is_some() {
+            self.validate_properties(serializers)?;
+            self.handle_packet_entities_impl::<true, true>(
+                msg,
+                class_info,
+                serializers,
+                string_tables,
+                field_decode_ctx,
+                Some(class_filter),
+                fp_buf,
+            )
+        } else {
+            self.handle_packet_entities_impl::<true, false>(
+                msg,
+                class_info,
+                serializers,
+                string_tables,
+                field_decode_ctx,
+                Some(class_filter),
+                fp_buf,
+            )
+        }
     }
 
     /// Leave/delete handling for the class-filtered path.
@@ -973,7 +1064,7 @@ impl EntityContainer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn handle_create(
+    fn handle_create<const PROJECTED: bool>(
         &mut self,
         index: i32,
         br: &mut BitReader,
@@ -1006,6 +1097,13 @@ impl EntityContainer {
             return Ok(());
         }
 
+        let properties = if PROJECTED {
+            self.properties
+                .as_ref()
+                .and_then(|filter| filter.get(&class_entry.network_name))
+        } else {
+            None
+        };
         let mut entity = Entity::new(index, class_id, Arc::clone(&class_entry.network_name));
         entity.serial = serial;
         // Pre-size the field map to the class's field count: a create applies the
@@ -1014,13 +1112,14 @@ impl EntityContainer {
         entity.fields.reserve(serializer.fields.len());
 
         self.baseline_cache
-            .apply(
+            .apply::<PROJECTED>(
                 &mut entity,
                 serializer,
                 serializers,
                 string_tables,
                 field_decode_ctx,
                 fp_buf,
+                properties,
             )
             .map_err(|err| Error::Parse {
                 context: format!(
@@ -1031,7 +1130,7 @@ impl EntityContainer {
 
         // Apply create delta
         entity
-            .apply_update(br, serializer, field_decode_ctx, fp_buf)
+            .apply_update::<PROJECTED>(br, serializer, field_decode_ctx, fp_buf, properties)
             .map_err(|err| Error::Parse {
                 context: format!(
                     "create delta for {} (class_id {}): {}",
@@ -1044,7 +1143,7 @@ impl EntityContainer {
         Ok(())
     }
 
-    fn handle_update(
+    fn handle_update<const PROJECTED: bool>(
         &mut self,
         index: i32,
         br: &mut BitReader,
@@ -1074,7 +1173,20 @@ impl EntityContainer {
                     context: format!("no serializer for {}", entity.class_name),
                 })?;
 
-            entity.apply_update(br, serializer, field_decode_ctx, fp_buf)?;
+            let properties = if PROJECTED {
+                self.properties
+                    .as_ref()
+                    .and_then(|filter| filter.get(&entity.class_name))
+            } else {
+                None
+            };
+            entity.apply_update::<PROJECTED>(
+                br,
+                serializer,
+                field_decode_ctx,
+                fp_buf,
+                properties,
+            )?;
             EntityChange::from_entity(kind, entity)
         };
         self.updated.push(index);
@@ -1083,7 +1195,7 @@ impl EntityContainer {
     }
 
     /// Returns `true` if this entity is tracked and was updated (vs. skipped).
-    fn handle_update_filtered(
+    fn handle_update_filtered<const PROJECTED: bool>(
         &mut self,
         index: i32,
         br: &mut BitReader,
@@ -1094,7 +1206,7 @@ impl EntityContainer {
     ) -> Result<bool> {
         // Check if we're tracking this entity
         if self.get(index).is_some() {
-            self.handle_update(index, br, serializers, field_decode_ctx, fp_buf)?;
+            self.handle_update::<PROJECTED>(index, br, serializers, field_decode_ctx, fp_buf)?;
             return Ok(true);
         }
 

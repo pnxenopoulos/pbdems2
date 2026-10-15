@@ -87,6 +87,7 @@ pub struct DemoIndex {
     full_packets: Vec<CommandPosition>,
     distinct_ticks: Vec<i32>,
     stream_start: Option<usize>,
+    schema_changes: bool,
 }
 
 impl DemoIndex {
@@ -103,6 +104,13 @@ impl DemoIndex {
     /// Absolute offset immediately after `DEM_SyncTick`, when present.
     pub const fn stream_start(&self) -> Option<usize> {
         self.stream_start
+    }
+
+    /// Whether class or serializer commands occur after signon.
+    ///
+    /// Consumers with schema-bound caches can retain full decoding for these files.
+    pub const fn has_schema_changes(&self) -> bool {
+        self.schema_changes
     }
 
     /// Last full-packet keyframe at or before `target_tick`.
@@ -334,6 +342,8 @@ impl<'a> Demo<'a> {
             if !past_sync {
                 continue;
             }
+            index.schema_changes |=
+                matches!(header.cmd, command::SEND_TABLES | command::CLASS_INFO);
             if header.cmd == command::FULL_PACKET {
                 index
                     .full_packets

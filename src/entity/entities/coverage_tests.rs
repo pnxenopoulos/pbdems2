@@ -946,22 +946,24 @@ fn pointer_clear_removes_child_value() {
     let mut partial = BitWriter::default();
     emit_single_bool_update(&mut partial, true);
     entity
-        .apply_update(
+        .apply_update::<false>(
             &mut BitReader::new(&partial.finish()),
             serializer,
             &mut FieldDecodeContext::new(1.0 / 64.0),
             &mut Vec::new(),
+            None,
         )
         .unwrap();
     assert_eq!(entity.get_u32(Some(child)), 42);
     let mut update = BitWriter::default();
     emit_single_bool_update(&mut update, false);
     entity
-        .apply_update(
+        .apply_update::<false>(
             &mut BitReader::new(&update.finish()),
             serializer,
             &mut FieldDecodeContext::new(1.0 / 64.0),
             &mut Vec::new(),
+            None,
         )
         .unwrap();
     assert!(matches!(
@@ -1000,11 +1002,12 @@ fn dynamic_array_shrink_then_grow_does_not_restore_old_child() {
         emit_op(&mut update, FINISH);
         update.push_uvarint32(count);
         entity
-            .apply_update(
+            .apply_update::<false>(
                 &mut BitReader::new(&update.finish()),
                 serializer,
                 &mut FieldDecodeContext::new(1.0 / 64.0),
                 &mut Vec::new(),
+                None,
             )
             .unwrap();
     }
@@ -1098,13 +1101,14 @@ fn apply_cached_baseline(
     context: &mut FieldDecodeContext,
 ) -> Result<bool> {
     let mut entity = Entity::new(0, 0, "CTest".into());
-    cache.apply(
+    cache.apply::<false>(
         &mut entity,
         schemas.get("CTest").unwrap(),
         schemas,
         tables,
         context,
         &mut Vec::new(),
+        None,
     )?;
     Ok(entity.get_bool(Some(field_key(0))))
 }
@@ -1195,13 +1199,14 @@ fn cached_simulation_time_uses_the_current_tick_interval() {
     for (interval, seconds) in [(1.0 / 64.0, 2.0), (1.0 / 32.0, 4.0)] {
         context.set_tick_interval(interval);
         cache
-            .apply(
+            .apply::<false>(
                 &mut entity,
                 schemas.get("CTest").unwrap(),
                 &schemas,
                 &tables,
                 &mut context,
                 &mut Vec::new(),
+                None,
             )
             .unwrap();
         assert_eq!(entity.get_f32(Some(field_key(0))), seconds);
@@ -1235,11 +1240,12 @@ fn wide_array_values_survive_independently_and_shrink_removes_only_discarded_ele
         bits.push_uvarint32(value);
     }
     entity
-        .apply_update(
+        .apply_update::<false>(
             &mut BitReader::new(&bits.finish()),
             serializer,
             &mut FieldDecodeContext::new(1.0 / 64.0),
             &mut Vec::new(),
+            None,
         )
         .unwrap();
     let zero = serializer.resolve_field_key("m_values.0").unwrap();
@@ -1252,11 +1258,12 @@ fn wide_array_values_survive_independently_and_shrink_removes_only_discarded_ele
         emit_op(&mut bits, FINISH);
         bits.push_uvarint32(length);
         entity
-            .apply_update(
+            .apply_update::<false>(
                 &mut BitReader::new(&bits.finish()),
                 serializer,
                 &mut FieldDecodeContext::new(1.0 / 64.0),
                 &mut Vec::new(),
+                None,
             )
             .unwrap();
         assert_eq!(entity.get_u32(Some(zero)), 11);
@@ -1264,3 +1271,5 @@ fn wide_array_values_survive_independently_and_shrink_removes_only_discarded_ele
     }
     assert!(serializer.resolve_field_key("m_values.4096").is_none());
 }
+
+mod property_filter;

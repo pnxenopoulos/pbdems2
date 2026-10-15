@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::io::BitReader;
 use crate::limits::DecodeLimits;
 
@@ -396,7 +396,7 @@ impl Decoder {
             }
 
             Decoder::F32SimulationTime => {
-                br.skip_varint()?;
+                br.read_uvarint32()?;
             }
 
             Decoder::F32Coord => {
@@ -412,11 +412,11 @@ impl Decoder {
             }
 
             Decoder::Ammo => {
-                br.skip_varint()?;
+                br.read_uvarint32()?;
             }
 
             Decoder::String => {
-                br.skip_string()?;
+                br.skip_string_limited(ctx.limits.max_field_string_bytes())?;
             }
 
             Decoder::Vector2(inner) => {
@@ -447,7 +447,15 @@ impl Decoder {
 
             Decoder::BinaryBlock => {
                 let n = br.read_uvarint32()? as usize;
-                br.skip_bits(n * 8)?;
+                ctx.limits.ensure(
+                    "decoded field binary block",
+                    n,
+                    ctx.limits.max_field_string_bytes(),
+                )?;
+                let bits = n.checked_mul(8).ok_or_else(|| Error::Parse {
+                    context: "binary block bit length overflow".into(),
+                })?;
+                br.skip_bits(bits)?;
             }
 
             Decoder::Poly => {
@@ -1296,6 +1304,63 @@ mod tests {
             assert!((f - 1.5).abs() < f32::EPSILON);
         } else {
             panic!("expected F32");
+        }
+    }
+
+    #[test]
+    fn skipped_strings_enforce_the_same_limit_and_cursor_as_decoding() {
+        for alignment in 0..8 {
+            let mut bits = crate::test_utils::BitWriter::default();
+            bits.push_bits(0, alignment);
+            bits.push_c_string("abcd");
+            let data = bits.finish();
+            let mut decoded = BitReader::new(&data);
+            let mut skipped = BitReader::new(&data);
+            decoded.skip_bits(alignment).unwrap();
+            skipped.skip_bits(alignment).unwrap();
+            let mut context = FieldDecodeContext::with_limits(
+                1.0 / 64.0,
+                DecodeLimits::default().with_max_field_string_bytes(2),
+            );
+            let expected = Decoder::String
+                .decode(&mut context, &mut decoded)
+                .unwrap_err();
+            let actual = Decoder::String
+                .skip(&mut context, &mut skipped)
+                .unwrap_err();
+            assert_eq!(
+                (actual.to_string(), skipped.position()),
+                (expected.to_string(), decoded.position())
+            );
+        }
+    }
+
+    #[test]
+    fn skipped_binary_blocks_enforce_the_same_limit_as_decoding() {
+        let data = [4, 1, 2, 3, 4];
+        let mut context = FieldDecodeContext::with_limits(
+            1.0 / 64.0,
+            DecodeLimits::default().with_max_field_string_bytes(2),
+        );
+        let expected = Decoder::BinaryBlock
+            .decode(&mut context, &mut BitReader::new(&data))
+            .unwrap_err();
+        let actual = Decoder::BinaryBlock
+            .skip(&mut context, &mut BitReader::new(&data))
+            .unwrap_err();
+        assert_eq!(actual.to_string(), expected.to_string());
+    }
+
+    #[test]
+    fn skipped_32_bit_varints_stop_after_five_bytes() {
+        for decoder in [Decoder::Ammo, Decoder::F32SimulationTime] {
+            let data = [0x80; 10];
+            let mut decoded = BitReader::new(&data);
+            let mut skipped = BitReader::new(&data);
+            let mut context = FieldDecodeContext::new(1.0 / 64.0);
+            decoder.decode(&mut context, &mut decoded).unwrap();
+            decoder.skip(&mut context, &mut skipped).unwrap();
+            assert_eq!(skipped.position(), decoded.position());
         }
     }
 

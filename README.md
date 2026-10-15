@@ -194,3 +194,35 @@ cargo run -p pbdems2-cli -- validate match.dem
 
 Add `--json` for machine-readable output. Release archives include Linux,
 macOS, and Windows binaries. The CLI is not published to crates.io, but is available on the [Releases](https://github.com/pnxenopoulos/pbdems2/releases).
+
+## Select entity properties
+
+Compile a filter from a prepared playback's serializers, then create a new session:
+
+```rust
+use pbdems2::PropertyFilter;
+
+let filter = PropertyFilter::new(prepared.initial_state().serializers(), [
+    ("CCSPlayerPawn", vec!["m_iHealth", "m_hController"]),
+    ("CCSPlayerController", vec!["m_steamID", "m_iszPlayerName"]),
+]);
+prepared.session_with_properties(parser, filter)?.run_to_end(|state| {
+    // Read the selected values from state.entities().
+})?;
+```
+
+The filter is optional. Without it, full decoding uses the existing path.
+Unlisted classes keep all fields; combine property and class filters to omit
+other classes. Missing paths select nothing. Use `field_value` or `try_get` to
+distinguish an omitted value from zero.
+
+A composite or array path selects its entire subtree, including future elements.
+For example, Deadlock consumers can select
+`m_CCitadelAbilityComponent.m_vecAbilities`. Numeric dynamic-array element paths
+select only that element. Pointer presence and array lengths are always retained
+so clear and shrink updates remove stale children.
+
+The selection is fixed for the session and remains in its checkpoints. Use a
+fresh session to change it. The filter rejects a different serializer schema;
+the demo index's `has_schema_changes()` can identify files that need full
+decoding. Skipped values still consume their wire data and enforce decode limits.

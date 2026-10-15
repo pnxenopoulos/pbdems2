@@ -92,6 +92,70 @@ fn packet_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn property_benchmarks(criterion: &mut Criterion) {
+    const ENTITIES: usize = 512;
+    let tables = StringTableContainer::new();
+    let mut group = criterion.benchmark_group("projected_entities");
+    for nested in [false, true] {
+        for string_bytes in [0, 128] {
+            let workload = EntityWorkload::new(ENTITIES, nested, string_bytes);
+            let prefix = if nested { "state." } else { "" };
+            let properties = pbdems2::PropertyFilter::new(
+                &workload.serializers,
+                [(
+                    pbdems2_bench::BENCH_CLASS,
+                    [format!("{prefix}value_01"), format!("{prefix}value_03")],
+                )],
+            );
+            let bytes = workload.updates(1, MIXED_FIELDS);
+            let shape = if nested { "nested" } else { "flat" };
+            for mode in ["full", "selected", "unlisted"] {
+                let mut entities = match mode {
+                    "selected" => EntityContainer::with_properties(properties.clone()),
+                    "unlisted" => EntityContainer::with_properties(pbdems2::PropertyFilter::new(
+                        &workload.serializers,
+                        [("Other", ["missing"])],
+                    )),
+                    _ => EntityContainer::new(),
+                };
+                let mut context = FieldDecodeContext::new(1.0 / 64.0);
+                let mut paths = Vec::new();
+                entities
+                    .handle_packet_entities(
+                        PacketEntities::new(ENTITIES as i32, &workload.creates, 0),
+                        &workload.classes,
+                        &workload.serializers,
+                        &tables,
+                        &mut context,
+                        &mut paths,
+                    )
+                    .unwrap();
+                group.throughput(Throughput::Elements((ENTITIES * MIXED_FIELDS) as u64));
+                group.bench_function(
+                    BenchmarkId::new(mode, format!("{shape}_strings_{string_bytes}")),
+                    |b| {
+                        b.iter(|| {
+                            entities
+                                .handle_packet_entities(
+                                    PacketEntities::new(ENTITIES as i32, black_box(&bytes), 0),
+                                    &workload.classes,
+                                    &workload.serializers,
+                                    &tables,
+                                    &mut context,
+                                    &mut paths,
+                                )
+                                .expect("valid projected updates");
+                            black_box(&entities);
+                            entities.clear_tick_changes();
+                        });
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
 fn stage_benchmarks(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("mixed_stages");
     for nested in [false, true] {
@@ -152,5 +216,10 @@ fn stage_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, packet_benchmarks, stage_benchmarks);
+criterion_group!(
+    benches,
+    packet_benchmarks,
+    stage_benchmarks,
+    property_benchmarks
+);
 criterion_main!(benches);

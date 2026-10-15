@@ -49,7 +49,7 @@ pub mod position;
 #[cfg(test)]
 mod test_utils;
 
-pub use entity::Entity;
+pub use entity::{Entity, PropertyFilter};
 pub use error::{Error, Result};
 pub use limits::DecodeLimits;
 #[cfg(feature = "mmap")]
