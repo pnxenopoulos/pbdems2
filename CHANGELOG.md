@@ -2,11 +2,16 @@
 
 Notable pbdems2 changes live here.
 
+## v0.4.2
+
+- Resolve fixed-array elements by index and return numeric indices in field
+  names. Reject out-of-range indices.
+
 ## v0.4.1
 
 - Add immutable property filters for individual fields and nested subtrees. Use `PreparedPlayback::session_with_properties` or `EntityContainer::with_properties`.
 - Use the same filter for initial state, baselines, deltas, seeks, segments, and checkpoints. Reject a different serializer schema. Keep full decoding on a separate path.
-- Enforce string and binary-block limits when skipping values. Preserve 32-bit varint widths.
+- Enforce string and binary-block limits when skipping values. Preserve 32-bit varint widths. Keep binary validation outside the common skip dispatcher.
 
 ## v0.4.0
 
