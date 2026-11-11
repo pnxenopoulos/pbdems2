@@ -226,8 +226,10 @@ pub struct Serializer {
 
 impl Serializer {
     /// Resolve a dotted field name (e.g. "m_pGameRules.m_bGamePaused") to a packed u64 key.
-    /// Walks the serializer hierarchy matching send_node + var_name against path components.
-    /// Returns `None` when the name cannot fit in the seven-level packed path.
+    ///
+    /// Use numeric components for array indices, such as `m_iAmmo.14`. Returns
+    /// `None` for unknown fields, out-of-range fixed-array indices, and paths
+    /// that cannot fit in a packed key.
     pub fn resolve_field_key(&self, path: &str) -> Option<u64> {
         // A single component needs no temporary heap allocation.
         if !path.contains('.') {
@@ -271,12 +273,12 @@ impl Serializer {
             // More parts remain — we need to recurse into a sub-serializer
             let next_part = parts[consumed];
 
-            // Dynamic array: next part is a numeric index
-            if field.is_dynamic_array() {
+            let is_dynamic_array = field.is_dynamic_array();
+            if is_dynamic_array || field.metadata.is_fixed_array() {
                 if let Ok(array_idx) = next_part.parse::<usize>()
-                    && let Some(ref fs) = field.field_serializer
+                    && let Some(inner_field) =
+                        field.get_child(if is_dynamic_array { 0 } else { array_idx })
                 {
-                    let inner_field = fs.fields.first()?;
                     let after_idx = consumed + 1;
 
                     if after_idx == parts.len() {
@@ -306,7 +308,7 @@ impl Serializer {
                 continue;
             }
 
-            // Non-dynamic: recurse into field_serializer
+            // Recurse into a non-array field's serializer.
             if let Some(ref fs) = field.field_serializer
                 && let Some(key) = fs.resolve_parts(&parts[consumed..], depth + 1)
             {
@@ -325,30 +327,45 @@ impl Serializer {
     }
 
     /// Convert a packed u64 key back to a dotted field name string.
-    /// Walks the serializer hierarchy using the unpacked FieldPath.
+    ///
+    /// Array elements use numeric indices. Returns `None` if a fixed-array
+    /// index is out of range.
     pub fn field_name_for_key(&self, key: u64) -> Option<String> {
         let fp = FieldPath::unpack(key);
         let indices = fp.data.get(..=fp.last)?;
         let mut name = String::new();
-        let mut field = self.fields.get(indices[0] as usize)?;
+        let mut field = self.fields.get(indices[0] as usize)?.as_ref();
         append_field_name(&mut name, field);
 
-        for &index in &indices[1..] {
+        let mut indices = indices[1..].iter().copied();
+        while let Some(index) = indices.next() {
             let idx = index as usize;
             if field.is_dynamic_array() {
                 write!(name, ".{idx}").expect("formatting an integer into a String cannot fail");
                 if let Some(ref fs) = field.field_serializer {
-                    field = fs.fields.first()?;
+                    field = fs.fields.first()?.as_ref();
                 } else {
                     break;
                 }
-            } else if let Some(ref fs) = field.field_serializer {
-                field = fs.fields.get(idx)?;
-                name.push('.');
-                append_field_name(&mut name, field);
+                continue;
+            }
+            let (serializer, idx) = if field.metadata.is_fixed_array() {
+                let element = field.get_child(idx)?;
+                write!(name, ".{idx}").expect("formatting an integer into a String cannot fail");
+                let Some(member) = indices.next() else {
+                    break;
+                };
+                // The synthetic element field still has the array's metadata.
+                // Read a member from its nested serializer directly.
+                (element.field_serializer.as_deref()?, member as usize)
+            } else if let Some(serializer) = field.field_serializer.as_deref() {
+                (serializer, idx)
             } else {
                 break;
-            }
+            };
+            field = serializer.fields.get(idx)?.as_ref();
+            name.push('.');
+            append_field_name(&mut name, field);
         }
 
         Some(name)
@@ -1071,6 +1088,108 @@ mod tests {
             "outer.node.items.12.missing",
         ] {
             assert_eq!(serializer.resolve_field_key(name), None, "{name}");
+        }
+    }
+
+    fn fixed_array_schema() -> SerializerContainer {
+        use super::super::field_decoder::{BareCharEncoding, PreciseQAngleMode};
+
+        SerializerContainer::parse(
+            FlattenedSerializer::new(
+                vec![
+                    FlattenedSerializerDefinition::new(Some(0), vec![0]),
+                    FlattenedSerializerDefinition::new(Some(1), vec![0, 1]),
+                ],
+                [
+                    "Item",
+                    "Root",
+                    "int32[4]",
+                    "ammo",
+                    "weapon.services",
+                    "Item[2]",
+                    "items",
+                ]
+                .map(String::from)
+                .to_vec(),
+                vec![
+                    FlattenedField::new(Some(2), Some(3)).with_send_node_sym(Some(4)),
+                    FlattenedField::new(Some(5), Some(6)).with_serializer_name_sym(Some(0)),
+                ],
+            ),
+            DecodeProfile::new(BareCharEncoding::UnsignedVarint, PreciseQAngleMode::Raw),
+        )
+        .expect("fixed-array fixture should parse")
+    }
+
+    const FIXED_ARRAY_PATHS: &[(&str, &[i16])] = &[
+        ("weapon.services.ammo", &[0]),
+        ("weapon.services.ammo.0", &[0, 0]),
+        ("weapon.services.ammo.3", &[0, 3]),
+        ("items.1", &[1, 1]),
+        ("items.1.weapon.services.ammo.3", &[1, 1, 0, 3]),
+    ];
+
+    fn pack_test_path(indices: &[i16]) -> u64 {
+        let mut path = FieldPath {
+            last: indices.len() - 1,
+            ..FieldPath::default()
+        };
+        path.data[..indices.len()].copy_from_slice(indices);
+        path.try_pack().expect("representable path")
+    }
+
+    #[test]
+    fn fixed_array_lookup_resolves_wire_indices() {
+        let schema = fixed_array_schema();
+        let serializer = schema.get("Root").expect("root serializer");
+        for &(name, indices) in FIXED_ARRAY_PATHS {
+            assert_eq!(
+                serializer.resolve_field_key(name),
+                Some(pack_test_path(indices)),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_array_reverse_lookup_names_wire_indices() {
+        let schema = fixed_array_schema();
+        let serializer = schema.get("Root").expect("root serializer");
+        for &(name, indices) in FIXED_ARRAY_PATHS {
+            assert_eq!(
+                serializer
+                    .field_name_for_key(pack_test_path(indices))
+                    .as_deref(),
+                Some(name)
+            );
+        }
+    }
+
+    #[test]
+    fn fixed_array_lookup_rejects_invalid_indices() {
+        let schema = fixed_array_schema();
+        let serializer = schema.get("Root").expect("root serializer");
+        for name in [
+            "weapon.services.ammo.4",
+            "weapon.services.ammo.-1",
+            "weapon.services.ammo.invalid",
+            "items.2",
+            "items.1.weapon.services.ammo.4",
+        ] {
+            assert_eq!(serializer.resolve_field_key(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn fixed_array_reverse_lookup_rejects_out_of_range_indices() {
+        let schema = fixed_array_schema();
+        let serializer = schema.get("Root").expect("root serializer");
+        for indices in [&[0, 4][..], &[1, 2][..], &[1, 1, 0, 4][..]] {
+            assert_eq!(
+                serializer.field_name_for_key(pack_test_path(indices)),
+                None,
+                "{indices:?}"
+            );
         }
     }
 

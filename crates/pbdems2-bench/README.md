@@ -93,9 +93,6 @@ See [RESULTS.md](RESULTS.md) for the first refactor and
 [RELEASE_0.3.2.md](RELEASE_0.3.2.md) checks the final candidate against published
 0.3.1, including retained safety guards and small lookup tradeoffs.
 
-[RELEASE_0.4.1.md](RELEASE_0.4.1.md) measures property filtering and full-decoding
-controls.
-
 [RELEASE_0.4.0.md](RELEASE_0.4.0.md) measures the correctness fixes and decoded
 baseline cache, including remaining performance costs.
 

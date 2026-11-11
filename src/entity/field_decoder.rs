@@ -416,7 +416,7 @@ impl Decoder {
             }
 
             Decoder::String => {
-                br.skip_string_limited(ctx.limits.max_field_string_bytes())?;
+                return br.skip_string_limited(ctx.limits.max_field_string_bytes());
             }
 
             Decoder::Vector2(inner) => {
@@ -446,16 +446,7 @@ impl Decoder {
             }
 
             Decoder::BinaryBlock => {
-                let n = br.read_uvarint32()? as usize;
-                ctx.limits.ensure(
-                    "decoded field binary block",
-                    n,
-                    ctx.limits.max_field_string_bytes(),
-                )?;
-                let bits = n.checked_mul(8).ok_or_else(|| Error::Parse {
-                    context: "binary block bit length overflow".into(),
-                })?;
-                br.skip_bits(bits)?;
+                return skip_binary_block(br, ctx.limits.max_field_string_bytes());
             }
 
             Decoder::Poly => {
@@ -1019,6 +1010,23 @@ pub fn get_field_metadata(
             }
         }
     }
+}
+
+// Keep limit checks and their error temporaries out of primitive skips.
+#[inline(never)]
+fn skip_binary_block(br: &mut BitReader, limit: usize) -> Result<()> {
+    let n = br.read_uvarint32()? as usize;
+    if n > limit {
+        return Err(Error::LimitExceeded {
+            resource: "decoded field binary block",
+            limit,
+            actual: n,
+        });
+    }
+    let bits = n.checked_mul(8).ok_or_else(|| Error::Parse {
+        context: "binary block bit length overflow".into(),
+    })?;
+    br.skip_bits(bits)
 }
 
 #[cfg(test)]
